@@ -1,0 +1,1900 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ArduinoGrade – BMT</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#05080f;--s1:#0b1018;--s2:#101520;--s3:#162030;
+  --bd:#1e2d45;--bd2:#253650;
+  --ac:#00e5a0;--ac2:#3b9eff;--red:#ff5c5c;--yw:#ffc94d;
+  --tx:#cdd9e8;--mt:#4d6a88;--mt2:#7a94b0;
+  --mono:'IBM Plex Mono',monospace;
+  --sans:'Plus Jakarta Sans',sans-serif;
+}
+html,body{height:100%}
+body{background:var(--bg);color:var(--tx);font-family:var(--sans);font-size:14px;overflow-x:hidden}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--bd2);border-radius:4px}
+
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes loaderAnim{0%{width:0;margin-left:0}50%{width:100%;margin-left:0}100%{width:0;margin-left:100%}}
+
+/* LOADING */
+#loading-screen{
+  position:fixed;inset:0;background:var(--bg);z-index:9999;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  transition:opacity .3s
+}
+#loading-screen.hide{opacity:0;pointer-events:none}
+.ld-logo{font-family:var(--mono);font-size:1.6rem;font-weight:700;color:var(--ac);letter-spacing:-1.5px}
+.ld-logo span{color:var(--tx)}
+.ld-txt{font-family:var(--mono);font-size:.75rem;color:var(--mt);letter-spacing:.5px}
+.ld-bar{width:160px;height:2px;background:var(--bd);border-radius:2px;overflow:hidden;margin-top:4px}
+.ld-fill{height:100%;background:var(--ac);border-radius:2px;animation:loaderAnim 1.3s ease-in-out infinite}
+
+/* LOGIN */
+#login-page{
+  display:none;min-height:100vh;align-items:center;justify-content:center;padding:20px;
+  background:radial-gradient(ellipse 65% 45% at 50% -5%,rgba(0,229,160,.08),transparent)
+}
+#login-page.show{display:flex;animation:fadeUp .35s ease}
+.login-wrap{width:100%;max-width:390px}
+.login-logo{text-align:center;margin-bottom:28px}
+.login-logo .big{font-family:var(--mono);font-size:2.1rem;font-weight:700;color:var(--ac);letter-spacing:-2px}
+.login-logo .big span{color:var(--tx)}
+.login-logo .sub{color:var(--mt2);font-size:.82rem;margin-top:6px}
+
+/* APP */
+#main-app{display:none;height:100vh;flex-direction:column}
+#main-app.show{display:flex}
+
+/* TOPBAR */
+#topbar{
+  flex-shrink:0;height:52px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;background:rgba(5,8,15,.92);border-bottom:1px solid var(--bd);
+  backdrop-filter:blur(14px);position:sticky;top:0;z-index:100
+}
+.tb-left{display:flex;align-items:center;gap:18px}
+.tb-logo{font-family:var(--mono);font-size:1rem;font-weight:700;color:var(--ac);letter-spacing:-.5px;white-space:nowrap}
+.tb-logo span{color:var(--tx)}
+.tb-nav{display:flex;gap:2px}
+.tnav{padding:5px 13px;border:none;border-radius:6px;background:transparent;color:var(--mt2);font-family:var(--sans);font-size:.83rem;font-weight:500;cursor:pointer;transition:all .15s}
+.tnav:hover{color:var(--tx);background:var(--s3)}
+.tnav.on{color:var(--ac);background:rgba(0,229,160,.08)}
+.tb-right{display:flex;align-items:center;gap:10px}
+.upill{display:flex;align-items:center;gap:8px;padding:4px 12px 4px 5px;border-radius:20px;background:var(--s3);border:1px solid var(--bd)}
+.uav{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:#000}
+.uname{font-size:.8rem;font-weight:600;line-height:1.3}
+.urole{font-size:.67rem;line-height:1.3}
+
+/* CONTENT */
+#content{flex:1;overflow-y:auto;padding:22px 24px;max-width:1200px;width:100%;margin:0 auto}
+.view{display:none;animation:fadeUp .25s ease}
+.view.on{display:block}
+
+/* PAGE HEADER */
+.ph{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;gap:12px;flex-wrap:wrap}
+.ph-title{font-family:var(--mono);font-size:1.2rem;font-weight:700}
+.ph-sub{color:var(--mt2);font-size:.82rem;margin-top:3px}
+
+/* CARDS */
+.card{background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:18px;margin-bottom:12px}
+.ctitle{font-family:var(--mono);font-size:.68rem;color:var(--ac);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px}
+
+/* ITEM GRID */
+.igrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(265px,1fr));gap:12px}
+.icard{background:var(--s1);border:1px solid var(--bd);border-radius:10px;padding:16px;cursor:pointer;transition:border-color .18s,transform .18s;position:relative}
+.icard:hover{border-color:var(--ac);transform:translateY(-2px)}
+.icard .ic-icon{font-size:1.8rem;margin-bottom:10px}
+.icard .ic-name{font-weight:600;font-size:.95rem;margin-bottom:4px;padding-right:48px}
+.icard .ic-meta{font-size:.76rem;color:var(--mt2)}
+.icard .ic-arr{font-family:var(--mono);font-size:.72rem;color:var(--ac);margin-top:10px}
+.icard .ic-del{position:absolute;top:12px;right:12px;background:rgba(255,92,92,.1);border:1px solid rgba(255,92,92,.2);color:var(--red);border-radius:6px;padding:3px 8px;font-size:.71rem;font-weight:700;cursor:pointer}
+.icard .ic-del:hover{background:rgba(255,92,92,.22)}
+
+/* LIST ROW */
+.lrow{display:flex;align-items:center;gap:12px;background:var(--s1);border:1px solid var(--bd);border-radius:8px;padding:12px 14px;margin-bottom:8px;transition:border-color .15s}
+.lrow.click{cursor:pointer}
+.lrow.click:hover{border-color:var(--ac)}
+.lr-ico{font-size:1.3rem;flex-shrink:0}
+.lr-inf{flex:1;min-width:0}
+.lr-ttl{font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr-meta{font-size:.75rem;color:var(--mt2);margin-top:2px;display:flex;gap:8px;flex-wrap:wrap}
+.lr-r{display:flex;align-items:center;gap:7px;flex-shrink:0;flex-wrap:wrap}
+
+/* TABLE */
+.tscroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.84rem}
+thead th{text-align:left;padding:8px 12px;font-family:var(--mono);font-size:.64rem;color:var(--mt2);text-transform:uppercase;letter-spacing:.6px;border-bottom:1px solid var(--bd)}
+tbody td{padding:10px 12px;border-bottom:1px solid rgba(30,45,69,.4)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:rgba(255,255,255,.015)}
+.tmono{font-family:var(--mono);font-size:.78rem}
+.tmt{color:var(--mt2)}
+
+/* BADGES */
+.badge{display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;font-size:.7rem;font-weight:700;white-space:nowrap}
+.bg-g{background:rgba(0,229,160,.1);color:var(--ac);border:1px solid rgba(0,229,160,.25)}
+.bg-b{background:rgba(59,158,255,.1);color:var(--ac2);border:1px solid rgba(59,158,255,.25)}
+.bg-r{background:rgba(255,92,92,.1);color:var(--red);border:1px solid rgba(255,92,92,.25)}
+.bg-y{background:rgba(255,201,77,.1);color:var(--yw);border:1px solid rgba(255,201,77,.25)}
+.bg-gray{background:var(--s3);color:var(--mt2);border:1px solid var(--bd)}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:7px 16px;border:none;border-radius:7px;font-family:var(--sans);font-size:.83rem;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-ac{background:var(--ac);color:#000}
+.btn-ac:hover:not(:disabled){background:#2fffc0;box-shadow:0 0 18px rgba(0,229,160,.28)}
+.btn-sec{background:var(--s3);color:var(--tx);border:1px solid var(--bd)}
+.btn-sec:hover:not(:disabled){border-color:var(--ac);color:var(--ac)}
+.btn-red{background:rgba(255,92,92,.1);color:var(--red);border:1px solid rgba(255,92,92,.2)}
+.btn-red:hover:not(:disabled){background:rgba(255,92,92,.2)}
+.btn-ghost{background:transparent;color:var(--mt2);border:1px solid var(--bd)}
+.btn-ghost:hover:not(:disabled){color:var(--tx);background:var(--s3)}
+.btn-sm{padding:4px 10px;font-size:.75rem;border-radius:5px}
+.btn-lg{padding:10px 22px;font-size:.9rem}
+.btn-full{width:100%;justify-content:center}
+
+/* FORM */
+.fg{margin-bottom:11px}
+.fg label{display:block;font-size:.73rem;color:var(--mt2);margin-bottom:5px;letter-spacing:.2px}
+.fg input,.fg select,.fg textarea{width:100%;padding:8px 12px;background:var(--s2);border:1px solid var(--bd);border-radius:7px;color:var(--tx);font-family:var(--sans);font-size:.88rem;outline:none;transition:border-color .15s}
+.fg input:focus,.fg select:focus,.fg textarea:focus{border-color:var(--ac);box-shadow:0 0 0 3px rgba(0,229,160,.06)}
+.fg textarea{resize:vertical;line-height:1.6;min-height:70px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:600px){.g2{grid-template-columns:1fr}.igrid{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr !important}}
+
+/* CODE */
+.cbox{background:#060b12;border:1px solid var(--bd);border-radius:9px;overflow:hidden}
+.cbar{display:flex;align-items:center;justify-content:space-between;padding:7px 12px;background:#0a1019;border-bottom:1px solid var(--bd)}
+.cdots{display:flex;gap:5px}
+.cdot{width:9px;height:9px;border-radius:50%}
+.cta{display:block;width:100%;padding:13px;background:transparent;border:none;color:#b8c9dc;font-family:var(--mono);font-size:.78rem;line-height:1.8;resize:vertical;min-height:220px;outline:none;tab-size:2}
+.cpre{padding:13px;font-family:var(--mono);font-size:.78rem;color:#b8c9dc;line-height:1.8;white-space:pre-wrap;max-height:290px;overflow-y:auto;word-break:break-all}
+
+/* MODAL */
+.overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);backdrop-filter:blur(5px);z-index:500;align-items:center;justify-content:center;padding:16px}
+.overlay.open{display:flex;animation:fadeUp .2s ease}
+.modal{background:var(--s1);border:1px solid var(--bd2);border-radius:12px;width:100%;max-height:92vh;overflow-y:auto}
+.mhead{display:flex;justify-content:space-between;align-items:center;padding:15px 18px;border-bottom:1px solid var(--bd);position:sticky;top:0;background:var(--s1);z-index:1}
+.mhead h3{font-family:var(--mono);font-size:.88rem;font-weight:700}
+.mcls{background:none;border:none;color:var(--mt2);font-size:1.3rem;cursor:pointer;padding:1px 6px;border-radius:4px}
+.mcls:hover{color:var(--tx);background:var(--s3)}
+.mbody{padding:18px}
+
+/* TOAST */
+#toast{position:fixed;bottom:20px;right:20px;z-index:9000;padding:10px 16px;border-radius:8px;font-size:.84rem;font-weight:500;background:var(--s2);border:1px solid var(--bd2);box-shadow:0 8px 28px rgba(0,0,0,.5);transform:translateY(70px);opacity:0;pointer-events:none;transition:all .26s cubic-bezier(.34,1.56,.64,1);max-width:340px;border-left-width:3px}
+#toast.show{transform:translateY(0);opacity:1}
+
+/* BREADCRUMB */
+.bc{display:flex;align-items:center;gap:6px;font-size:.8rem;color:var(--mt2);margin-bottom:16px;flex-wrap:wrap}
+.bc .sep{opacity:.35}
+.bc .cur{color:var(--tx);font-weight:600}
+
+/* INNER TABS */
+.itabs{display:flex;gap:2px;border-bottom:1px solid var(--bd);margin-bottom:18px}
+.itab{padding:7px 15px;border:none;background:transparent;color:var(--mt2);font-family:var(--sans);font-size:.83rem;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s}
+.itab:hover{color:var(--tx)}
+.itab.on{color:var(--ac);border-bottom-color:var(--ac)}
+
+/* RESULT BOXES */
+.res-ok{background:rgba(0,229,160,.05);border:1px solid rgba(0,229,160,.2);border-radius:8px;padding:14px}
+.res-err{background:rgba(255,92,92,.05);border:1px solid rgba(255,92,92,.2);border-radius:8px;padding:14px}
+.err-ln{background:rgba(255,92,92,.08);border:1px solid rgba(255,92,92,.15);border-radius:5px;padding:6px 10px;margin-bottom:5px;font-family:var(--mono);font-size:.75rem;color:var(--red)}
+.score-big{font-family:var(--mono);font-size:2.4rem;font-weight:700;line-height:1;margin:8px 0}
+.fbbox{background:var(--s3);border-left:3px solid var(--ac2);border-radius:0 7px 7px 0;padding:10px 13px;font-size:.84rem;line-height:1.7;color:var(--mt2);margin-top:10px}
+
+/* UTILS */
+.flex{display:flex}.fac{align-items:center}.fbw{justify-content:space-between}
+.gap6{gap:6px}.gap8{gap:8px}.gap10{gap:10px}
+.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}.mb12{margin-bottom:12px}
+.c-g{color:var(--ac)}.c-r{color:var(--red)}.c-y{color:var(--yw)}.c-mt{color:var(--mt2)}.c-mono{font-family:var(--mono)}
+.empty{text-align:center;padding:40px 20px;color:var(--mt2)}
+.empty .ei{font-size:2rem;margin-bottom:8px}
+.spin{display:inline-block;border-top-color:var(--ac);border-style:solid;border-color:var(--bd2);border-radius:50%;animation:spin .65s linear infinite}
+.spin-sm{width:14px;height:14px;border-width:2px}
+.spin-md{width:28px;height:28px;border-width:2.5px}
+.spin-lg{width:38px;height:38px;border-width:3px}
+</style>
+</head>
+<body>
+
+<!-- LOADING SCREEN -->
+<div id="loading-screen">
+  <div class="ld-logo">Arduino<span>Grade</span></div>
+  <div class="ld-txt" id="ld-txt">Đang khởi động...</div>
+  <div class="ld-bar"><div class="ld-fill"></div></div>
+</div>
+
+<!-- LOGIN PAGE -->
+<div id="login-page">
+  <div class="login-wrap">
+    <div class="login-logo">
+      <div class="big">Arduino<span>Grade</span></div>
+      <div class="sub">Hệ thống nộp bài &amp; chấm điểm lập trình</div>
+    </div>
+    <div class="card">
+      <div class="ctitle">Đăng nhập hệ thống</div>
+      <div class="fg"><label>Email</label>
+        <input type="email" id="f-email" placeholder="email@truong.edu.vn" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div class="fg"><label>Mật khẩu</label>
+        <input type="password" id="f-pass" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()">
+      </div>
+      <div id="login-err" style="color:var(--red);font-size:.8rem;margin-bottom:10px;display:none"></div>
+      <button class="btn btn-ac btn-lg btn-full" id="login-btn" onclick="doLogin()">Đăng nhập →</button>
+      <p style="text-align:center;color:var(--mt2);font-size:.74rem;margin-top:10px">Tài khoản được cấp bởi giáo viên / quản trị viên</p>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="main-app">
+  <div id="topbar">
+    <div class="tb-left">
+      <div class="tb-logo">Arduino<span>Grade</span></div>
+      <nav class="tb-nav" id="tb-nav"></nav>
+    </div>
+    <div class="tb-right">
+      <div class="upill">
+        <div class="uav" id="u-av"></div>
+        <div>
+          <div class="uname" id="u-nm"></div>
+          <div class="urole" id="u-rl"></div>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="openM('m-chpwd')" style="margin-right:6px">🔑 Đổi MK</button>
+      <button class="btn btn-ghost btn-sm" onclick="doLogout()">Đăng xuất</button>
+    </div>
+  </div>
+  <div id="content">
+    <!-- ADMIN -->
+    <div class="view" id="v-admin">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">Quản lý Giáo viên</div><div class="ph-sub">Tạo và quản lý tài khoản giáo viên</div></div>
+        <button class="btn btn-ac" onclick="openM('m-teacher')">＋ Thêm giáo viên</button>
+      </div>
+      <div class="card"><div class="ctitle">Danh sách giáo viên</div><div id="tbl-teachers"></div></div>
+    </div>
+
+    <!-- TEACHER CLASSES -->
+    <div class="view" id="v-classes">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">Lớp học của tôi</div><div class="ph-sub">Quản lý lớp, học sinh và bài tập</div></div>
+        <button class="btn btn-ac" onclick="openM('m-class')">＋ Tạo lớp mới</button>
+      </div>
+      <div id="g-classes" class="igrid"></div>
+    </div>
+
+    <!-- CLASS DETAIL -->
+    <div class="view" id="v-cdetail">
+      <div class="bc" id="bc-c"></div>
+      <div class="ph flex fbw fac" id="ph-c"></div>
+      <div class="itabs" id="cls-tabs"></div>
+      <div id="cls-body"></div>
+    </div>
+
+    <!-- STUDENT CLASSES -->
+    <div class="view" id="v-sclasses">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title" id="s-greet">Lớp học của tôi</div><div class="ph-sub">Chọn lớp để xem bài tập</div></div>
+      </div>
+      <div id="g-sclasses" class="igrid"></div>
+    </div>
+
+    <!-- STUDENT ASSIGNMENTS -->
+    <div class="view" id="v-sassigns">
+      <div class="bc" id="bc-sa"></div>
+      <div class="ph flex fbw fac" id="ph-sa"></div>
+      <div id="list-sa"></div>
+    </div>
+
+    <!-- SUBMIT PAGE -->
+    <div class="view" id="v-submit">
+      <div class="bc" id="bc-sub"></div>
+      <div id="submit-body"></div>
+    </div>
+
+    <!-- XIN NGHỈ – HỌC SINH -->
+    <div class="view" id="v-absence">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">📅 Xin nghỉ học</div><div class="ph-sub">Gửi đơn xin nghỉ đến giáo viên</div></div>
+        <button class="btn btn-ac" onclick="openM('m-absence')">＋ Gửi đơn xin nghỉ</button>
+      </div>
+      <div id="g-absence"></div>
+    </div>
+
+    <!-- XIN NGHỈ – GIÁO VIÊN -->
+    <div class="view" id="v-absence-teacher">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">📋 Đơn xin nghỉ</div><div class="ph-sub">Duyệt đơn xin nghỉ của học sinh</div></div>
+        <div style="display:flex;gap:8px">
+          <select id="abs-filter" class="fg" style="margin:0;padding:6px 12px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--tx);font-size:.84rem" onchange="loadAbsenceTeacher()">
+            <option value="all">Tất cả</option>
+            <option value="pending">Chờ duyệt</option>
+            <option value="approved">Đã duyệt</option>
+            <option value="rejected">Từ chối</option>
+          </select>
+        </div>
+      </div>
+      <div id="g-absence-teacher"></div>
+    </div>
+
+    <!-- THÔNG BÁO – GIÁO VIÊN -->
+    <div class="view" id="v-announce-teacher">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">📢 Thông báo</div><div class="ph-sub">Đăng tài liệu, link video và thông báo cho học sinh</div></div>
+        <button class="btn btn-ac" onclick="openAnnounceModal(null)">＋ Đăng thông báo</button>
+      </div>
+      <div id="g-announce-teacher"></div>
+    </div>
+
+    <!-- THÔNG BÁO – HỌC SINH -->
+    <div class="view" id="v-announce-student">
+      <div class="ph flex fbw fac">
+        <div><div class="ph-title">📢 Thông báo</div><div class="ph-sub">Tài liệu, video bài học và thông báo từ giáo viên</div></div>
+      </div>
+      <div id="g-announce-student"></div>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- ═══ MODALS ═══ -->
+<div class="overlay" id="m-teacher">
+  <div class="modal" style="max-width:420px">
+    <div class="mhead"><h3>Thêm Giáo viên</h3><button class="mcls" onclick="closeM('m-teacher')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Họ và tên *</label><input id="t-name" placeholder="Nguyễn Văn A"></div>
+      <div class="fg"><label>Email *</label><input type="email" id="t-email" placeholder="giaovien@truong.edu.vn"></div>
+      <div class="fg"><label>Mật khẩu *</label><input type="password" id="t-pass" placeholder="Tối thiểu 8 ký tự"></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="t-btn" onclick="addTeacher()">Tạo tài khoản</button>
+        <button class="btn btn-ghost" onclick="closeM('m-teacher')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="m-class">
+  <div class="modal" style="max-width:440px">
+    <div class="mhead"><h3>Tạo lớp học mới</h3><button class="mcls" onclick="closeM('m-class')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Tên lớp *</label><input id="cl-name" placeholder="VD: Lập trình Arduino K23A"></div>
+      <div class="fg"><label>Mô tả</label><textarea id="cl-desc" rows="2" placeholder="Mô tả ngắn về lớp học..."></textarea></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="cl-btn" onclick="addCls()">Tạo lớp</button>
+        <button class="btn btn-ghost" onclick="closeM('m-class')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="m-student">
+  <div class="modal" style="max-width:420px">
+    <div class="mhead"><h3>Thêm Học sinh vào lớp</h3><button class="mcls" onclick="closeM('m-student')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Họ và tên *</label><input id="st-name" placeholder="Trần Thị B"></div>
+      <div class="fg"><label>Email *</label><input type="email" id="st-email" placeholder="hocsinh@truong.edu.vn"></div>
+      <div class="fg"><label>Mật khẩu *</label><input type="password" id="st-pass" placeholder="Tối thiểu 8 ký tự"></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="st-btn" onclick="addStudent()">Tạo &amp; Thêm vào lớp</button>
+        <button class="btn btn-ghost" onclick="closeM('m-student')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="m-assign">
+  <div class="modal" style="max-width:700px">
+    <div class="mhead"><h3>Tạo bài tập mới</h3><button class="mcls" onclick="closeM('m-assign')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Tên bài tập *</label><input id="a-title" placeholder="VD: Blink LED với tần số tuỳ chỉnh"></div>
+      <div class="g2">
+        <div class="fg"><label>Điểm tối đa</label><input type="number" id="a-score" value="10" min="1" max="100"></div>
+        <div class="fg"><label>Hạn nộp bài</label><input type="datetime-local" id="a-dl"></div>
+      </div>
+      <div class="fg"><label>Đề bài / Yêu cầu</label><textarea id="a-desc" rows="3" placeholder="Mô tả chi tiết yêu cầu bài tập..."></textarea></div>
+      <div class="fg"><label>Tiêu chí chấm điểm (GV tham khảo khi chấm tay)</label>
+        <textarea id="a-criteria" rows="3" placeholder="- LED blink đúng tần số (3đ)&#10;- Dùng hằng số cho delay (2đ)&#10;- Comment đầy đủ (2đ)"></textarea>
+      </div>
+      <div class="fg">
+        <label>Code template cho học sinh</label>
+        <div class="cbox">
+          <div class="cbar"><div class="cdots"><div class="cdot" style="background:#ff5f57"></div><div class="cdot" style="background:#febc2e"></div><div class="cdot" style="background:#28c840"></div></div><span style="font-family:var(--mono);font-size:.68rem;color:var(--mt2)">template.ino</span></div>
+          <textarea class="cta" id="a-tpl" rows="10" placeholder="void setup() {
+  // Khởi tạo
+}
+void loop() {
+  // Logic chính
+}"></textarea>
+        </div>
+      </div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="a-btn" onclick="addAssign()">Tạo bài tập</button>
+        <button class="btn btn-ghost" onclick="closeM('m-assign')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="m-grade">
+  <div class="modal" style="max-width:720px">
+    <div class="mhead"><h3 id="g-title">Chấm điểm</h3><button class="mcls" onclick="closeM('m-grade')">×</button></div>
+    <div class="mbody">
+      <div id="g-file-area" style="display:none;margin-bottom:12px">
+        <div style="font-size:.7rem;color:var(--mt2);margin-bottom:6px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px">File đã nộp</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--s2);border:1px solid var(--bd);border-radius:8px">
+          <span style="font-size:1.2rem">📄</span>
+          <span id="g-file-name" style="font-family:var(--mono);font-size:.84rem;flex:1"></span>
+          <button class="btn btn-ac btn-sm" id="g-dl-btn" onclick="gradeDownloadFile()">⬇ Tải file xuống</button>
+        </div>
+      </div>
+      <div class="mb12">
+        <div style="font-size:.7rem;color:var(--mt2);margin-bottom:6px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.6px">Code của học sinh</div>
+        <div class="cbox"><div class="cbar"><div class="cdots"><div class="cdot" style="background:#ff5f57"></div><div class="cdot" style="background:#febc2e"></div><div class="cdot" style="background:#28c840"></div></div><span style="font-family:var(--mono);font-size:.68rem;color:var(--mt2)">submission.ino</span></div><div class="cpre" id="g-code"></div></div>
+      </div>
+      <div id="g-log" style="display:none;margin-bottom:12px" class="res-err"><div style="font-size:.75rem;font-family:var(--mono);color:var(--red)" id="g-log-txt"></div></div>
+      <div class="g2">
+        <div class="fg"><label>Điểm (0 – <span id="g-max">10</span>)</label><input type="number" id="g-score" min="0" step="0.5" placeholder="VD: 8.5"></div>
+        <div></div>
+      </div>
+      <div class="fg"><label>Nhận xét của giáo viên</label><textarea id="g-cmt" rows="3" placeholder="Nhận xét chi tiết..."></textarea></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="g-btn" onclick="saveGrade()">💾 Lưu điểm</button>
+        <button class="btn btn-ghost" onclick="closeM('m-grade')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Đăng thông báo (giáo viên) -->
+<div class="overlay" id="m-announce">
+  <div class="modal" style="max-width:560px">
+    <div class="mhead"><h3 id="ann-modal-title">📢 Đăng thông báo</h3><button class="mcls" onclick="closeM('m-announce')">×</button></div>
+    <div class="mbody">
+      <div class="g2">
+        <div class="fg"><label>Loại thông báo *</label>
+          <select id="ann-type" style="padding:9px 12px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--tx);font-size:.88rem;width:100%" onchange="toggleAnnFields()">
+            <option value="general">📣 Thông báo chung</option>
+            <option value="document">📄 Tài liệu học tập</option>
+            <option value="video">🎬 Video bài học</option>
+          </select>
+        </div>
+        <div class="fg"><label>Gửi đến lớp *</label>
+          <select id="ann-class" style="padding:9px 12px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--tx);font-size:.88rem;width:100%">
+            <option value="">-- Tất cả các lớp --</option>
+          </select>
+        </div>
+      </div>
+      <div class="fg"><label>Tiêu đề *</label><input type="text" id="ann-title" placeholder="VD: Tài liệu ôn tập chương 3"></div>
+      <div class="fg"><label>Nội dung / Mô tả</label><textarea id="ann-body" rows="4" placeholder="Mô tả nội dung, hướng dẫn cho học sinh..."></textarea></div>
+      <div id="ann-link-area" style="display:none">
+        <div class="fg"><label id="ann-link-label">🔗 Link tài liệu</label><input type="url" id="ann-link" placeholder="https://..."></div>
+      </div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="ann-btn" onclick="submitAnnounce()">📤 Đăng thông báo</button>
+        <button class="btn btn-ghost" onclick="closeM('m-announce')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Xem chi tiết thông báo -->
+<div class="overlay" id="m-announce-detail">
+  <div class="modal" style="max-width:560px">
+    <div class="mhead"><h3 id="ann-detail-title">Thông báo</h3><button class="mcls" onclick="closeM('m-announce-detail')">×</button></div>
+    <div class="mbody" id="ann-detail-body"></div>
+  </div>
+</div>
+
+<!-- Modal: Gửi đơn xin nghỉ (học sinh) -->
+<div class="overlay" id="m-absence">
+  <div class="modal" style="max-width:460px">
+    <div class="mhead"><h3>📅 Gửi đơn xin nghỉ</h3><button class="mcls" onclick="closeM('m-absence')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Lớp học *</label>
+        <select id="ab-class" style="padding:9px 12px;border-radius:7px;background:var(--s2);border:1px solid var(--bd);color:var(--tx);font-size:.88rem;width:100%">
+          <option value="">-- Chọn lớp --</option>
+        </select>
+      </div>
+      <div class="fg"><label>Ngày nghỉ *</label><input type="date" id="ab-date"></div>
+      <div class="fg"><label>Lý do xin nghỉ *</label><textarea id="ab-reason" rows="4" placeholder="Mô tả lý do xin nghỉ..."></textarea></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="ab-btn" onclick="submitAbsence()">📤 Gửi đơn</button>
+        <button class="btn btn-ghost" onclick="closeM('m-absence')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Duyệt/từ chối đơn (giáo viên) -->
+<div class="overlay" id="m-review-abs">
+  <div class="modal" style="max-width:480px">
+    <div class="mhead"><h3>📋 Duyệt đơn xin nghỉ</h3><button class="mcls" onclick="closeM('m-review-abs')">×</button></div>
+    <div class="mbody">
+      <div id="rab-info" style="background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:14px;margin-bottom:14px;font-size:.88rem;line-height:1.9"></div>
+      <div class="fg"><label>Ghi chú của giáo viên (không bắt buộc)</label><textarea id="rab-note" rows="3" placeholder="Nhập ghi chú nếu có..."></textarea></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="rab-approve" onclick="reviewAbsence('approved')">✅ Duyệt</button>
+        <button class="btn btn-red" style="flex:1;justify-content:center" id="rab-reject"  onclick="reviewAbsence('rejected')">✗ Từ chối</button>
+        <button class="btn btn-ghost" onclick="closeM('m-review-abs')">Đóng</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Đổi mật khẩu (tất cả user) -->
+<div class="overlay" id="m-chpwd">
+  <div class="modal" style="max-width:420px">
+    <div class="mhead"><h3>🔑 Đổi mật khẩu</h3><button class="mcls" onclick="closeM('m-chpwd')">×</button></div>
+    <div class="mbody">
+      <div class="fg"><label>Mật khẩu hiện tại *</label><input type="password" id="cp-old" placeholder="Nhập mật khẩu hiện tại"></div>
+      <div class="fg"><label>Mật khẩu mới *</label><input type="password" id="cp-new" placeholder="Tối thiểu 6 ký tự"></div>
+      <div class="fg"><label>Xác nhận mật khẩu mới *</label><input type="password" id="cp-cfm" placeholder="Nhập lại mật khẩu mới"></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="cp-btn" onclick="changePassword()">💾 Lưu mật khẩu</button>
+        <button class="btn btn-ghost" onclick="closeM('m-chpwd')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: Reset mật khẩu (admin reset cho GV) -->
+<div class="overlay" id="m-reset-pwd">
+  <div class="modal" style="max-width:420px">
+    <div class="mhead"><h3 id="rp-modal-title">🔄 Reset mật khẩu</h3><button class="mcls" onclick="closeM('m-reset-pwd')">×</button></div>
+    <div class="mbody">
+      <div id="rp-name" style="font-size:.9rem;color:var(--mt2);margin-bottom:12px"></div>
+      <div class="fg"><label>Mật khẩu mới *</label><input type="password" id="rp-new" placeholder="Nhập mật khẩu mới cho giáo viên"></div>
+      <div class="fg"><label>Xác nhận *</label><input type="password" id="rp-cfm" placeholder="Nhập lại mật khẩu mới"></div>
+      <div class="flex gap8 mt12">
+        <button class="btn btn-ac" style="flex:1;justify-content:center" id="rp-btn" onclick="resetPassword()">🔄 Reset mật khẩu</button>
+        <button class="btn btn-ghost" onclick="closeM('m-reset-pwd')">Hủy</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════
+// CONFIG – đã cấu hình sẵn
+// ═══════════════════════════════════════
+const SB_URL  = 'https://migvocsioomrxsspznkh.supabase.co';
+const SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im1pZ3ZvY3Npb29tcnhzc3B6bmtoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI4NDEzNTAsImV4cCI6MjA4ODQxNzM1MH0.onk-tAOh04ItqTyYJbgzTWEC91pd_nCG390TSkbyrDc';
+
+// Thông tin Admin mặc định
+const ADMIN_EMAIL = 'bmtteam2025@gmail.com';
+const ADMIN_PASS  = 'admin_bmt';
+const ADMIN_NAME  = 'Admin BMT';
+
+// ═══════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════
+let sb, ME=null, CLS=null, ASN=null, CUR_SUB=null, CLS_TAB='students', SEL_FILE=null;
+const GRADE_MAP={}; // lưu submissions để tránh JSON trong onclick
+
+// ═══════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════
+window.addEventListener('DOMContentLoaded', async () => {
+  document.querySelectorAll('.overlay').forEach(o =>
+    o.addEventListener('click', e => { if (e.target===o) o.classList.remove('open'); })
+  );
+
+  sb = supabase.createClient(SB_URL, SB_ANON);
+
+  setLdTxt('Đang kết nối...');
+  try {
+    const { data:{ session } } = await sb.auth.getSession();
+    if (session) {
+      await bootUser(session.user);
+    } else {
+      hideLoader();
+      showLoginPage();
+    }
+  } catch(e) {
+    hideLoader();
+    showLoginPage();
+    showLoginErr('Lỗi kết nối: ' + e.message);
+  }
+
+  sb.auth.onAuthStateChange(async (_e, sess) => {
+    if (sess) await bootUser(sess.user);
+    else { ME=null; hideLoader(); showLoginPage(); }
+  });
+});
+
+function setLdTxt(t){ const e=document.getElementById('ld-txt'); if(e) e.textContent=t; }
+function hideLoader(){
+  const e=document.getElementById('loading-screen');
+  e.classList.add('hide');
+  setTimeout(()=>e.style.display='none',310);
+}
+
+// ═══════════════════════════════════════
+// BOOT USER
+// ═══════════════════════════════════════
+async function bootUser(user) {
+  setLdTxt('Đang tải hồ sơ...');
+
+  const { data: profile, error: fetchErr } = await sb
+    .from('profiles').select('*').eq('id', user.id).single();
+
+  if (fetchErr && fetchErr.code !== 'PGRST116') {
+    // PGRST116 = not found (ok), others = real error (recursion, etc.)
+    console.error('Fetch profile error:', fetchErr.message);
+    hideLoader(); showLoginPage();
+    showLoginErr('Lỗi đọc hồ sơ: ' + fetchErr.message + ' → Hãy chạy fix_rls.sql trong Supabase SQL Editor!');
+    return;
+  }
+
+  if (!profile) {
+    setLdTxt('Đang tạo hồ sơ...');
+    const meta = user.user_metadata || {};
+    const isAdm = user.email === ADMIN_EMAIL;
+    const { data: newP, error: ie } = await sb.from('profiles').insert({
+      id: user.id,
+      full_name: meta.full_name || (isAdm ? ADMIN_NAME : user.email.split('@')[0]),
+      role: meta.role || (isAdm ? 'admin' : 'student')
+    }).select().single();
+    if (ie) {
+      hideLoader(); showLoginPage();
+      showLoginErr('Lỗi tạo hồ sơ: ' + ie.message);
+      return;
+    }
+    ME = newP;
+  } else {
+    ME = profile;
+  }
+  ME.email = user.email; // lưu email để dùng khi đổi mật khẩu
+
+  hideLoader();
+  startApp();
+}
+
+// ═══════════════════════════════════════
+// AUTH
+// ═══════════════════════════════════════
+function showLoginPage() {
+  document.getElementById('login-page').classList.add('show');
+  document.getElementById('main-app').classList.remove('show');
+}
+function showLoginErr(msg) {
+  const e=document.getElementById('login-err');
+  e.textContent=msg; e.style.display='block';
+}
+
+async function doLogin() {
+  const email=gv('f-email'), pass=gv('f-pass');
+  if (!email||!pass) { showLoginErr('Vui lòng điền đủ thông tin'); return; }
+  document.getElementById('login-err').style.display='none';
+  setBL('login-btn',true,'Đang đăng nhập...');
+  const { error } = await sb.auth.signInWithPassword({ email, password: pass });
+  setBL('login-btn',false,'Đăng nhập →');
+  if (error) showLoginErr(error.message === 'Invalid login credentials'
+    ? 'Email hoặc mật khẩu không đúng' : error.message);
+}
+
+async function doLogout() {
+  await sb.auth.signOut();
+  ME=null; CLS=null; ASN=null;
+  document.getElementById('main-app').classList.remove('show');
+  showLoginPage();
+}
+
+// ═══════════════════════════════════════
+// APP START
+// ═══════════════════════════════════════
+function startApp() {
+  document.getElementById('login-page').classList.remove('show');
+  document.getElementById('main-app').classList.add('show');
+  renderTopbar();
+  routeHome();
+}
+
+function renderTopbar() {
+  const clr = {admin:'#ff5c5c',teacher:'#3b9eff',student:'#00e5a0'}[ME.role];
+  const lbl = {admin:'Quản trị viên',teacher:'Giáo viên',student:'Học sinh'}[ME.role];
+  const av = document.getElementById('u-av');
+  av.textContent = ME.full_name[0].toUpperCase();
+  av.style.background = clr;
+  document.getElementById('u-nm').textContent = ME.full_name;
+  const rl = document.getElementById('u-rl');
+  rl.textContent = lbl; rl.style.color = clr;
+  const nav = document.getElementById('tb-nav');
+  if (ME.role==='admin')        nav.innerHTML = tnavHtml('v-admin','👩‍🏫 Giáo viên','admin');
+  else if (ME.role==='teacher') nav.innerHTML = tnavHtml('v-classes','🏫 Lớp học','teacher') + tnavHtml('v-absence-teacher','📋 Xin nghỉ','absence-teacher') + tnavHtml('v-announce-teacher','📢 Thông báo','announce-teacher');
+  else {
+    nav.innerHTML = tnavHtml('v-sclasses','🏫 Lớp học','student')
+      + tnavHtml('v-absence','📅 Xin nghỉ','absence')
+      + tnavHtml('v-announce-student','📢 Thông báo','announce-student');
+  }
+}
+function tnavHtml(v,l,k){ return `<button class="tnav on" data-key="${k}" onclick="navTo('${v}','${k}')">${l}</button>`; }
+
+function routeHome() {
+  if (ME.role==='admin')        navTo('v-admin','admin');
+  else if (ME.role==='teacher') navTo('v-classes','teacher');
+  else                          navTo('v-sclasses','student');
+}
+
+function navTo(view, key) {
+  CLS=null; ASN=null;
+  showView(view);
+  document.querySelectorAll('.tnav').forEach(b=>b.classList.toggle('on', b.dataset.key===key));
+  if (view==='v-admin')           loadTeachers();
+  if (view==='v-classes')         loadClasses();
+  if (view==='v-sclasses')        loadSClasses();
+  if (view==='v-absence')           loadAbsenceStudent();
+  if (view==='v-absence-teacher')   loadAbsenceTeacher();
+  if (view==='v-announce-teacher')  loadAnnounceTeacher();
+  if (view==='v-announce-student')  loadAnnounceStudent();
+}
+
+function showView(id) {
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('on'));
+  document.getElementById(id)?.classList.add('on');
+}
+
+// ═══════════════════════════════════════
+// ADMIN – GIÁO VIÊN
+// ═══════════════════════════════════════
+async function loadTeachers() {
+  const el=document.getElementById('tbl-teachers');
+  el.innerHTML = ld();
+  const {data,error} = await sb.from('profiles').select('*').eq('role','teacher').order('created_at',{ascending:false});
+  if (error) return el.innerHTML = errBox(error.message);
+  if (!data.length) return el.innerHTML = emptyBox('👩‍🏫','Chưa có giáo viên nào');
+  el.innerHTML=`<div class="tscroll"><table>
+    <thead><tr><th>#</th><th>Họ và tên</th><th>User ID</th><th>Ngày tạo</th><th></th></tr></thead>
+    <tbody>${data.map((t,i)=>`<tr>
+      <td class="tmt">${i+1}</td>
+      <td><strong>${t.full_name}</strong></td>
+      <td class="tmono tmt">${t.id.slice(0,12)}…</td>
+      <td class="tmt">${fd(t.created_at)}</td>
+      <td style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn-sec btn-sm" onclick="openResetPwd('${t.id}','${t.full_name}','teacher')">🔄 Reset MK</button>
+        <button class="btn btn-red btn-sm" onclick="delTeacher('${t.id}')">Xóa</button>
+      </td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function addTeacher() {
+  const name=gv('t-name'),email=gv('t-email'),pass=gv('t-pass');
+  if (!name||!email||!pass) return toast('Điền đủ thông tin','err');
+  setBL('t-btn',true,'Đang tạo...');
+
+  // Tạo client tạm RIÊNG để signUp không làm mất session giáo viên
+  const sbTemp = supabase.createClient(SB_URL, SB_ANON, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  const {data,error} = await sbTemp.auth.signUp({
+    email, password:pass,
+    options:{ data:{full_name:name, role:'teacher'} }
+  });
+  if (error){ setBL('t-btn',false,'Tạo tài khoản'); return toast(error.message,'err'); }
+
+  const uid = data.user?.id;
+  if (uid) {
+    // Insert profile bằng sb chính (session giáo viên vẫn còn)
+    const {data:ex} = await sb.from('profiles').select('id').eq('id',uid).maybeSingle();
+    if (!ex) await sb.from('profiles').insert({id:uid, full_name:name, role:'teacher'});
+    else     await sb.from('profiles').update({full_name:name, role:'teacher'}).eq('id',uid);
+  }
+
+  setBL('t-btn',false,'Tạo tài khoản');
+  toast('✅ Đã tạo giáo viên: '+name);
+  closeM('m-teacher'); clearV(['t-name','t-email','t-pass']); loadTeachers();
+}
+
+async function delTeacher(id) {
+  if (!confirm('Xóa giáo viên này khỏi hệ thống?')) return;
+  await sb.from('profiles').delete().eq('id',id);
+  toast('Đã xóa giáo viên'); loadTeachers();
+}
+
+// ── Đổi mật khẩu (tự đổi) ──
+async function changePassword() {
+  const oldP = document.getElementById('cp-old').value;
+  const newP = document.getElementById('cp-new').value;
+  const cfm  = document.getElementById('cp-cfm').value;
+  if (!oldP||!newP||!cfm) return toast('Điền đủ thông tin','err');
+  if (newP.length < 6)    return toast('Mật khẩu mới tối thiểu 6 ký tự','err');
+  if (newP !== cfm)       return toast('Mật khẩu xác nhận không khớp','err');
+
+  setBL('cp-btn',true,'Đang lưu...');
+  try {
+    // Xác minh mật khẩu cũ bằng cách signIn lại
+    const {error:se} = await sb.auth.signInWithPassword({email: ME.email, password: oldP});
+    if (se) { toast('Mật khẩu hiện tại không đúng','err'); return; }
+
+    const {error} = await sb.auth.updateUser({password: newP});
+    if (error) { toast('Lỗi: '+error.message,'err'); return; }
+    toast('✅ Đổi mật khẩu thành công!');
+    closeM('m-chpwd');
+    clearV(['cp-old','cp-new','cp-cfm']);
+  } catch(e) { toast('Lỗi: '+e.message,'err'); }
+  finally { setBL('cp-btn',false,'💾 Lưu mật khẩu'); }
+}
+
+// ── Reset mật khẩu (admin reset cho GV) ──
+let RESET_UID = null;
+function openResetPwd(uid, name, role) {
+  RESET_UID = uid;
+  const label = role==='student' ? 'Học sinh' : 'Giáo viên';
+  document.getElementById('rp-name').textContent = label+': ' + name;
+  document.getElementById('rp-modal-title').textContent = '🔄 Reset mật khẩu ' + label.toLowerCase();
+  clearV(['rp-new','rp-cfm']);
+  openM('m-reset-pwd');
+}
+
+async function resetPassword() {
+  const newP = document.getElementById('rp-new').value;
+  const cfm  = document.getElementById('rp-cfm').value;
+  if (!newP||!cfm)     return toast('Điền đủ thông tin','err');
+  if (newP.length < 6) return toast('Mật khẩu tối thiểu 6 ký tự','err');
+  if (newP !== cfm)    return toast('Mật khẩu xác nhận không khớp','err');
+  if (!RESET_UID)      return toast('Lỗi: không xác định được người dùng','err');
+
+  setBL('rp-btn',true,'Đang reset...');
+  try {
+    const {error} = await sb.rpc('admin_reset_password', {target_uid: RESET_UID, new_password: newP});
+    if (error) { toast('Lỗi: '+error.message+' — Hãy chạy reset_password_func.sql trước','err'); return; }
+    toast('✅ Đã reset mật khẩu thành công!');
+    closeM('m-reset-pwd');
+    clearV(['rp-new','rp-cfm']);
+  } catch(e) { toast('Lỗi: '+e.message,'err'); }
+  finally { setBL('rp-btn',false,'🔄 Reset mật khẩu'); }
+}
+
+// ═══════════════════════════════════════
+// TEACHER – LỚP HỌC
+// ═══════════════════════════════════════
+async function loadClasses() {
+  const el=document.getElementById('g-classes');
+  el.innerHTML=ld();
+  const {data,error}=await sb.from('classes').select('*').eq('teacher_id',ME.id).order('created_at',{ascending:false});
+  if (error) return el.innerHTML=errBox(error.message);
+  if (!data.length) return el.innerHTML=emptyBox('🏫','Chưa có lớp nào. Hãy tạo lớp đầu tiên!');
+  el.innerHTML=data.map(c=>`
+    <div class="icard" onclick="openCls('${c.id}','${esc(c.name)}','${esc(c.description||'')}')">
+      <button class="ic-del" onclick="event.stopPropagation();delCls('${c.id}')">✕</button>
+      <div class="ic-icon">🏫</div>
+      <div class="ic-name">${c.name}</div>
+      <div class="ic-meta">${c.description||'Không có mô tả'}</div>
+      <div class="ic-arr">Vào lớp →</div>
+    </div>`).join('');
+}
+
+async function addCls() {
+  const name=gv('cl-name'),desc=gv('cl-desc');
+  if (!name) return toast('Nhập tên lớp','err');
+  setBL('cl-btn',true,'Đang tạo...');
+  try {
+    const {error}=await sb.from('classes').insert({name,description:desc||null,teacher_id:ME.id});
+    if (error) { toast(error.message,'err'); return; }
+    toast('✅ Đã tạo lớp: '+name);
+    closeM('m-class'); clearV(['cl-name','cl-desc']); loadClasses();
+  } catch(e) { toast('Lỗi: '+e.message,'err'); }
+  finally { setBL('cl-btn',false,'Tạo lớp'); }
+}
+
+async function delCls(id) {
+  if (!confirm('Xóa lớp? Toàn bộ bài tập & bài nộp sẽ bị xóa.')) return;
+  await sb.from('classes').delete().eq('id',id);
+  toast('Đã xóa lớp'); loadClasses();
+}
+
+function openCls(id,name,desc) {
+  CLS={id,name,desc}; CLS_TAB='students';
+  renderClsDetail(); showView('v-cdetail');
+}
+
+function renderClsDetail() {
+  document.getElementById('bc-c').innerHTML=
+    `<button class="btn btn-ghost btn-sm" onclick="navTo('v-classes','teacher')">← Lớp học</button>
+     <span class="sep">/</span><span class="cur">${CLS.name}</span>`;
+  document.getElementById('ph-c').innerHTML=
+    `<div><div class="ph-title">${CLS.name}</div><div class="ph-sub c-mt">${CLS.desc||''}</div></div>`;
+  const TABS=[['students','👨‍💻 Học sinh'],['assignments','📋 Bài tập'],['grades','📊 Bảng điểm']];
+  document.getElementById('cls-tabs').innerHTML=TABS.map(([k,l])=>
+    `<button class="itab ${CLS_TAB===k?'on':''}" onclick="switchTab('${k}')">${l}</button>`).join('');
+  loadTab();
+}
+
+function switchTab(t){ CLS_TAB=t; renderClsDetail(); }
+function loadTab(){
+  if (CLS_TAB==='students')    tabStudents();
+  if (CLS_TAB==='assignments') tabAssigns();
+  if (CLS_TAB==='grades')      tabGrades();
+}
+
+// ─── Tab: Học sinh ───
+async function tabStudents() {
+  const el=document.getElementById('cls-body');
+  el.innerHTML=`<div class="flex fbw fac mb12">
+    <div class="ctitle" style="margin:0">Danh sách học sinh</div>
+    <button class="btn btn-ac btn-sm" onclick="openM('m-student')">＋ Thêm học sinh</button>
+  </div><div id="std-tbl">${ld()}</div>`;
+
+  const {data,error}=await sb.from('enrollments')
+    .select('id,enrolled_at,student_id,student:profiles!student_id(id,full_name)')
+    .eq('class_id',CLS.id);
+  const el2=document.getElementById('std-tbl');
+  if (error) return el2.innerHTML=errBox(error.message);
+  if (!data.length) return el2.innerHTML=emptyBox('👨‍💻','Chưa có học sinh nào trong lớp');
+  el2.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><div class="tscroll"><table>
+    <thead><tr><th>#</th><th>Họ và tên</th><th>User ID</th><th>Ngày thêm</th><th></th></tr></thead>
+    <tbody>${data.map((e,i)=>`<tr>
+      <td class="tmt">${i+1}</td>
+      <td><strong>${e.student?.full_name||'?'}</strong></td>
+      <td class="tmono tmt">${e.student_id.slice(0,12)}…</td>
+      <td class="tmt">${fd(e.enrolled_at)}</td>
+      <td style="display:flex;gap:6px">
+        <button class="btn btn-sec btn-sm" onclick="openResetPwd('${e.student_id}','${e.student?.full_name||''}','student')">🔄 Reset MK</button>
+        <button class="btn btn-red btn-sm" onclick="removeStudent('${e.id}')">Xóa</button>
+      </td>
+    </tr>`).join('')}</tbody>
+  </table></div></div>`;
+}
+
+async function addStudent() {
+  const name=gv('st-name'),email=gv('st-email'),pass=gv('st-pass');
+  if (!name||!email||!pass) return toast('Điền đủ thông tin','err');
+  setBL('st-btn',true,'Đang tạo...');
+
+  // Tạo client tạm RIÊNG — signUp sẽ không overwrite session giáo viên
+  const sbTemp = supabase.createClient(SB_URL, SB_ANON, {
+    auth: { persistSession: false, autoRefreshToken: false }
+  });
+  const {data,error}=await sbTemp.auth.signUp({
+    email, password:pass,
+    options:{ data:{full_name:name, role:'student'} }
+  });
+  if (error){ setBL('st-btn',false,'Tạo & Thêm vào lớp'); return toast(error.message,'err'); }
+
+  const uid = data.user?.id;
+  if (!uid){ setBL('st-btn',false,'Tạo & Thêm vào lớp'); return toast('Không lấy được ID học sinh','err'); }
+
+  // Dùng sb chính (session GV) để insert profile + enrollment
+  const {data:ex}=await sb.from('profiles').select('id').eq('id',uid).maybeSingle();
+  if (!ex) {
+    const {error:pe}=await sb.from('profiles').insert({id:uid, full_name:name, role:'student'});
+    if (pe){ setBL('st-btn',false,'Tạo & Thêm vào lớp'); return toast('Lỗi tạo profile: '+pe.message,'err'); }
+  }
+
+  const {error:e2}=await sb.from('enrollments').insert({class_id:CLS.id,student_id:uid});
+  setBL('st-btn',false,'Tạo & Thêm vào lớp');
+  if (e2) return toast('Lỗi thêm lớp: '+e2.message,'err');
+  toast('✅ Đã thêm học sinh: '+name);
+  closeM('m-student'); clearV(['st-name','st-email','st-pass']);
+  tabStudents();
+}
+
+async function removeStudent(eid) {
+  if (!confirm('Xóa học sinh khỏi lớp?')) return;
+  await sb.from('enrollments').delete().eq('id',eid);
+  toast('Đã xóa học sinh'); tabStudents();
+}
+
+// ─── Tab: Bài tập ───
+async function tabAssigns() {
+  const el=document.getElementById('cls-body');
+  el.innerHTML=`<div class="flex fbw fac mb12">
+    <div class="ctitle" style="margin:0">Danh sách bài tập</div>
+    <button class="btn btn-ac btn-sm" onclick="openM('m-assign')">＋ Tạo bài tập</button>
+  </div><div id="a-list">${ld()}</div>`;
+  const {data,error}=await sb.from('assignments').select('*').eq('class_id',CLS.id).order('created_at',{ascending:false});
+  const el2=document.getElementById('a-list');
+  if (error) { console.error('tabAssigns error:', error); return el2.innerHTML=errBox(error.message+' | Thử chạy lại reset_rls_clean.sql'); }
+  if (!data.length) return el2.innerHTML=emptyBox('📋','Chưa có bài tập nào');
+  el2.innerHTML=data.map(a=>`
+    <div class="lrow">
+      <div class="lr-ico">📋</div>
+      <div class="lr-inf">
+        <div class="lr-ttl">${a.title}</div>
+        <div class="lr-meta">
+          <span>Tối đa: ${a.max_score}đ</span>
+          ${a.deadline?`<span>Hạn: ${fd(a.deadline)}</span>`:''}
+        </div>
+      </div>
+      <div class="lr-r">
+        <span class="badge ${a.is_open?'bg-g':'bg-gray'}">${a.is_open?'● Đang mở':'○ Đóng'}</span>
+        <button class="btn ${a.is_open?'btn-sec':'btn-ac'} btn-sm" onclick="toggleA('${a.id}',${a.is_open})">${a.is_open?'Đóng':'Mở bài'}</button>
+        <button class="btn btn-red btn-sm" onclick="delA('${a.id}')">Xóa</button>
+      </div>
+    </div>`).join('');
+}
+
+async function addAssign() {
+  const title=gv('a-title');
+  if (!title) return toast('Nhập tên bài tập','err');
+  if (!CLS?.id) return toast('Lỗi: Chưa chọn lớp. Thử tải lại trang.','err');
+
+  const scoreRaw = gv('a-score');
+  const maxScore = parseFloat(scoreRaw);
+  if (isNaN(maxScore) || maxScore <= 0) {
+    // reset về 10 nếu trống/invalid
+    document.getElementById('a-score').value = '10';
+  }
+
+  const payload = {
+    class_id: CLS.id,
+    title,
+    description: gv('a-desc') || null,
+    criteria:    gv('a-criteria') || null,
+    template_code: document.getElementById('a-tpl').value || null,
+    max_score:   isNaN(maxScore) ? 10 : maxScore,
+    deadline:    gv('a-dl') || null,
+    is_open:     false
+  };
+
+  setBL('a-btn',true,'Đang tạo...');
+  try {
+    const {error} = await sb.from('assignments').insert(payload);
+    if (error) {
+      console.error('Insert assignment error:', error);
+      toast('Lỗi: ' + error.message, 'err');
+      return;
+    }
+    toast('✅ Đã tạo bài tập: ' + title);
+    closeM('m-assign');
+    clearV(['a-title','a-desc','a-criteria','a-dl']);
+    document.getElementById('a-tpl').value = '';
+    document.getElementById('a-score').value = '10';
+    tabAssigns();
+  } catch(e) {
+    console.error('addAssign exception:', e);
+    toast('Lỗi không xác định: ' + e.message, 'err');
+  } finally {
+    setBL('a-btn', false, 'Tạo bài tập');
+  }
+}
+
+async function toggleA(id,open) {
+  await sb.from('assignments').update({is_open:!open}).eq('id',id);
+  toast(open?'Đã đóng bài tập':'✅ Đã mở bài tập'); tabAssigns();
+}
+
+async function delA(id) {
+  if (!confirm('Xóa bài tập? Tất cả bài nộp sẽ bị xóa.')) return;
+  await sb.from('assignments').delete().eq('id',id);
+  toast('Đã xóa'); tabAssigns();
+}
+
+// ─── Tab: Bảng điểm ───
+async function tabGrades() {
+  const el=document.getElementById('cls-body');
+  el.innerHTML=ld();
+  const {data:asgns}=await sb.from('assignments').select('id,title,max_score').eq('class_id',CLS.id);
+  if (!asgns?.length) return el.innerHTML=emptyBox('📊','Chưa có bài tập nào');
+  const {data:subs}=await sb.from('submissions')
+    .select('*,student:profiles!student_id(full_name),assignment:assignments(title,max_score)')
+    .in('assignment_id',asgns.map(a=>a.id))
+    .order('submitted_at',{ascending:false});
+  if (!subs?.length) return el.innerHTML=emptyBox('📊','Chưa có bài nộp nào');
+
+  // Lưu vào GRADE_MAP để dùng trong onclick thay vì JSON.stringify
+  subs.forEach(s => { GRADE_MAP[s.id] = s; });
+
+  el.innerHTML=`<div class="card" style="padding:0;overflow:hidden"><div class="tscroll"><table>
+    <thead><tr><th>Học sinh</th><th>Bài tập</th><th>Nộp lúc</th><th>Compile</th><th>Điểm</th><th>Trạng thái</th><th></th></tr></thead>
+    <tbody>${subs.map(s=>{
+      const cb=s.compile_status==='ok'?`<span class="badge bg-g">✓ OK</span>`:s.compile_status==='error'?`<span class="badge bg-r">✗ Lỗi</span>`:`<span class="badge bg-y">⏳</span>`;
+      const sc=s.score!==null?`<span class="c-mono" style="font-weight:700;color:${s.score>=5?'var(--ac)':'var(--red)'}">${s.score}</span>`:`<span class="tmt">—</span>`;
+      const viewed = localStorage.getItem('viewed_'+s.id);
+      const viewBadge = viewed ? '' : `<span class="badge" style="background:rgba(0,229,160,.15);color:var(--ac);border:1px solid var(--ac);margin-left:4px">● Mới</span>`;
+      const st=s.compile_status==='error'
+        ? `<span class="badge bg-r">0đ tự động</span>${viewBadge}`
+        : s.score!==null
+          ? `<span class="badge bg-g">Đã chấm</span>${viewBadge}`
+          : `<span class="badge bg-y">Chờ chấm</span>${viewBadge}`;
+      const btnLabel = s.score!==null ? 'Sửa điểm' : 'Chấm điểm';
+      const btnStyle = s.compile_status==='error' ? 'btn-red' : 'btn-sec';
+      const dlBtn = s.file_url
+        ? `<button class="btn btn-ghost btn-sm" onclick="downloadFile('${s.file_url}','${(s.file_name||'sketch.ino').replace(/'/g,"\'")}')" title="Tải file .ino">⬇</button>`
+        : '';
+      // Dùng ID để tra GRADE_MAP, tránh JSON.stringify làm vỡ HTML
+      const btn = `<button class="btn ${btnStyle} btn-sm" onclick="openGradeById('${s.id}')">${btnLabel}</button>
+        ${dlBtn}
+        <button class="btn btn-ghost btn-sm" onclick="resetSubmission('${s.id}')" title="Xóa bài nộp để học sinh nộp lại">🗑</button>`;
+      return `<tr>
+        <td><strong>${s.student?.full_name||'?'}</strong></td>
+        <td class="tmt" style="font-size:.82rem">${s.assignment?.title||'?'}</td>
+        <td class="tmt" style="font-size:.78rem">${fdt(s.submitted_at)}</td>
+        <td>${cb}</td><td>${sc}</td><td>${st}</td><td>${btn}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+
+let CUR_FILE_PATH=null, CUR_FILE_NAME=null;
+
+function openGradeById(id) {
+  const s = GRADE_MAP[id];
+  if (!s) return toast('Không tìm thấy dữ liệu bài nộp','err');
+  openGrade(s);
+}
+
+function openGrade(s) {
+  CUR_SUB=s.id;
+  localStorage.setItem('viewed_'+s.id, '1');
+  const isErr = s.compile_status==='error';
+  document.getElementById('g-title').textContent=
+    (isErr ? '⚠ Bài lỗi – ' : '') + 'Chấm điểm: ' + (s.student?.full_name||'');
+  document.getElementById('g-code').textContent=s.code||'';
+  document.getElementById('g-max').textContent=s.assignment?.max_score||10;
+  document.getElementById('g-score').max=s.assignment?.max_score||10;
+  document.getElementById('g-score').value=s.score!==null?s.score:'';
+  document.getElementById('g-cmt').value=s.teacher_comment||'';
+
+  // Hiện khu vực file nếu học sinh nộp file
+  CUR_FILE_PATH = s.file_url||null;
+  CUR_FILE_NAME = s.file_name||'sketch.ino';
+  const fa = document.getElementById('g-file-area');
+  if (s.file_url) {
+    fa.style.display='block';
+    document.getElementById('g-file-name').textContent=s.file_name||'sketch.ino';
+  } else {
+    fa.style.display='none';
+  }
+
+  const lb=document.getElementById('g-log');
+  if (s.compile_log){
+    lb.style.display='block';
+    document.getElementById('g-log-txt').textContent=s.compile_log;
+  } else lb.style.display='none';
+  openM('m-grade');
+}
+
+async function gradeDownloadFile() {
+  if (!CUR_FILE_PATH) return;
+  setBL('g-dl-btn',true,'Đang tải...');
+  const {data,error} = await sb.storage.from('submissions').createSignedUrl(CUR_FILE_PATH,300);
+  setBL('g-dl-btn',false,'⬇ Tải file xuống');
+  if (error) return toast('Lỗi: '+error.message,'err');
+  const a=document.createElement('a'); a.href=data.signedUrl; a.download=CUR_FILE_NAME; a.click();
+}
+
+async function saveGrade() {
+  const score=parseFloat(document.getElementById('g-score').value);
+  if (isNaN(score)||score<0) return toast('Nhập điểm hợp lệ','err');
+  setBL('g-btn',true,'Đang lưu...');
+  try {
+    const {error}=await sb.from('submissions').update({
+      score,
+      teacher_comment:document.getElementById('g-cmt').value,
+      graded_by:ME.id,
+      graded_at:new Date().toISOString()
+    }).eq('id',CUR_SUB);
+    if (error) { toast(error.message,'err'); return; }
+    toast('✅ Đã lưu điểm'); closeM('m-grade'); tabGrades();
+  } catch(e) { toast('Lỗi: '+e.message,'err'); }
+  finally { setBL('g-btn',false,'💾 Lưu điểm'); }
+}
+
+// ═══════════════════════════════════════
+// STUDENT – LỚP HỌC
+// ═══════════════════════════════════════
+async function loadSClasses() {
+  document.getElementById('s-greet').textContent=`Xin chào, ${ME.full_name}!`;
+  const el=document.getElementById('g-sclasses');
+  el.innerHTML=ld();
+  const {data,error}=await sb.from('enrollments')
+    .select('class:classes(*,teacher:profiles!teacher_id(full_name))')
+    .eq('student_id',ME.id);
+  if (error) return el.innerHTML=errBox(error.message);
+  const cls=(data||[]).map(e=>e.class).filter(Boolean);
+  if (!cls.length) return el.innerHTML=emptyBox('🏫','Bạn chưa được thêm vào lớp nào');
+  el.innerHTML=cls.map(c=>`
+    <div class="icard" onclick="openSCls('${c.id}','${esc(c.name)}','${esc(c.description||'')}','${esc(c.teacher?.full_name||'')}')">
+      <div class="ic-icon">🏫</div>
+      <div class="ic-name">${c.name}</div>
+      <div class="ic-meta">GV: ${c.teacher?.full_name||'?'}</div>
+      <div class="ic-arr">Vào lớp →</div>
+    </div>`).join('');
+}
+
+function openSCls(id,name,desc,teacher) {
+  CLS={id,name,desc,teacher};
+  loadSAssigns(); showView('v-sassigns');
+}
+
+async function loadSAssigns() {
+  document.getElementById('bc-sa').innerHTML=
+    `<button class="btn btn-ghost btn-sm" onclick="navTo('v-sclasses','student')">← Lớp học</button>
+     <span class="sep">/</span><span class="cur">${CLS.name}</span>`;
+  document.getElementById('ph-sa').innerHTML=
+    `<div><div class="ph-title">${CLS.name}</div><div class="ph-sub c-mt">GV: ${CLS.teacher}</div></div>`;
+  const el=document.getElementById('list-sa');
+  el.innerHTML=ld();
+
+  const {data:asgns,error}=await sb.from('assignments')
+    .select('*').eq('class_id',CLS.id).eq('is_open',true).order('created_at',{ascending:false});
+  if (error) return el.innerHTML=errBox(error.message);
+  if (!asgns.length) return el.innerHTML=emptyBox('📋','Không có bài tập nào đang mở');
+
+  const {data:subs}=await sb.from('submissions').select('*')
+    .eq('student_id',ME.id).in('assignment_id',asgns.map(a=>a.id));
+  const sm={};(subs||[]).forEach(s=>{sm[s.assignment_id]=s;});
+
+  el.innerHTML=asgns.map(a=>{
+    const sub=sm[a.id];
+    let badge=`<span class="badge bg-b">Chưa nộp</span>`;
+    if (sub){
+      if (sub.score!==null) {
+        const pass = sub.score >= a.max_score * 0.5;
+        // Chỉ hiện tag "(lỗi)" nếu compile lỗi VÀ điểm chưa đạt tối đa
+        const errTag = (sub.compile_status==='error' && sub.score < a.max_score)
+          ? ' <span style="font-size:.7em;opacity:.7">(lỗi)</span>' : '';
+        badge = `<span class="badge ${pass?'bg-g':'bg-r'}">
+          ${pass?'✓':'✗'} ${sub.score}/${a.max_score}đ${errTag}
+        </span>`;
+      } else if (sub.compile_status==='error') {
+        badge = `<span class="badge bg-r">✗ Lỗi – chờ GV chấm</span>`;
+      } else {
+        badge = `<span class="badge bg-y">⏳ Chờ chấm</span>`;
+      }
+    }
+    return `<div class="lrow click" onclick="openSubmit('${a.id}')">
+      <div class="lr-ico">📋</div>
+      <div class="lr-inf">
+        <div class="lr-ttl">${a.title}</div>
+        <div class="lr-meta">
+          <span>Tối đa: ${a.max_score}đ</span>
+          ${a.deadline?`<span>Hạn: ${fd(a.deadline)}</span>`:''}
+          ${sub?`<span class="c-g">Đã nộp ${fdt(sub.submitted_at)}</span>`:''}
+        </div>
+      </div>
+      <div class="lr-r">${badge}</div>
+    </div>`;
+  }).join('');
+}
+
+async function openSubmit(aid) {
+  const {data:a}=await sb.from('assignments').select('*').eq('id',aid).single();
+  if (!a) return;
+  ASN=a;
+  const {data:prev}=await sb.from('submissions').select('*')
+    .eq('assignment_id',aid).eq('student_id',ME.id)
+    .order('submitted_at',{ascending:false}).limit(1).maybeSingle();
+
+  document.getElementById('bc-sub').innerHTML=
+    `<button class="btn btn-ghost btn-sm" onclick="openSCls('${CLS.id}','${esc(CLS.name)}','${esc(CLS.desc||'')}','${esc(CLS.teacher||'')}')">← Bài tập</button>
+     <span class="sep">/</span><span class="cur">${a.title}</span>`;
+
+  const code=prev?.code||a.template_code||'';
+  document.getElementById('submit-body').innerHTML=`
+    <div class="ph flex fbw fac">
+      <div>
+        <div class="ph-title">${a.title}</div>
+        <div class="ph-sub c-mt">Điểm tối đa: ${a.max_score}${a.deadline?' · Hạn: '+fd(a.deadline):''}</div>
+      </div>
+    </div>
+    <div class="detail-grid" style="display:grid;grid-template-columns:1fr 340px;gap:16px;align-items:start">
+      <div>
+        ${a.description?`<div class="card mb12"><div class="ctitle">Đề bài</div><div style="font-size:.88rem;line-height:1.75">${a.description}</div></div>`:''}
+        ${prev ? `
+          <div class="card" style="padding:16px">
+            <div class="ctitle" style="margin-bottom:8px">${prev.file_name ? '📎 File đã nộp' : '📝 Code đã nộp'}</div>
+            ${prev.file_name ? `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--s2);border:1px solid var(--bd);border-radius:8px">
+                <span style="font-size:1.2rem">📄</span>
+                <span style="font-family:var(--mono);font-size:.84rem;flex:1">${prev.file_name}</span>
+              </div>` : `
+              <div class="cbox" style="margin-top:0"><div class="cbar"><div class="cdots"><div class="cdot" style="background:#ff5f57"></div><div class="cdot" style="background:#febc2e"></div><div class="cdot" style="background:#28c840"></div></div><span style="font-family:var(--mono);font-size:.68rem;color:var(--mt2)">sketch.ino</span></div>
+              <textarea class="cta" rows="14" readonly style="opacity:.6;cursor:not-allowed">${prev.code||''}</textarea></div>`}
+            <div style="margin-top:10px;font-size:.82rem;color:var(--mt2)">🔒 Đã nộp — liên hệ giáo viên để nộp lại</div>
+          </div>
+        ` : `
+          <div class="card" style="padding:16px">
+            <div style="display:flex;gap:0;margin-bottom:14px;border:1px solid var(--bd);border-radius:8px;overflow:hidden">
+              <button id="tab-file" class="btn btn-ac" style="flex:1;border-radius:0;border:none;font-size:.84rem" onclick="switchSubmitTab('file')">📎 Nộp file .ino</button>
+              <button id="tab-code" class="btn btn-ghost" style="flex:1;border-radius:0;border:none;font-size:.84rem" onclick="switchSubmitTab('code')">📝 Paste code</button>
+            </div>
+            <div id="submit-tab-file">
+              <div id="drop-zone" style="border:2px dashed var(--bd);border-radius:10px;padding:28px;text-align:center;cursor:pointer;transition:border-color .2s"
+                onclick="document.getElementById('file-input').click()"
+                ondragover="event.preventDefault();this.style.borderColor='var(--ac)'"
+                ondragleave="this.style.borderColor='var(--bd)'"
+                ondrop="handleDrop(event)">
+                <div style="font-size:2rem;margin-bottom:8px">📂</div>
+                <div style="font-size:.88rem;color:var(--mt2)">Kéo thả hoặc <span style="color:var(--ac);font-weight:600">chọn file</span></div>
+                <div style="font-size:.76rem;color:var(--mt2);margin-top:4px">Chỉ nhận file <strong>.ino</strong>, tối đa 5MB</div>
+              </div>
+              <input type="file" id="file-input" accept=".ino,.txt" style="display:none" onchange="handleFileSelect(event)">
+              <div id="file-preview" style="display:none;margin-top:12px;padding:10px 14px;background:var(--s2);border:1px solid var(--bd);border-radius:8px;align-items:center;gap:10px">
+                <span style="font-size:1.2rem">📄</span>
+                <span id="file-name-display" style="font-family:var(--mono);font-size:.84rem;flex:1"></span>
+                <button class="btn btn-ghost btn-sm" onclick="clearFile()">✕</button>
+              </div>
+            </div>
+            <div id="submit-tab-code" style="display:none">
+              <div class="cbox">
+                <div class="cbar"><div class="cdots"><div class="cdot" style="background:#ff5f57"></div><div class="cdot" style="background:#febc2e"></div><div class="cdot" style="background:#28c840"></div></div><span style="font-family:var(--mono);font-size:.68rem;color:var(--mt2)">sketch.ino</span></div>
+                <textarea class="cta" id="ta-code" rows="16" placeholder="Paste code Arduino vào đây...">${a.template_code||''}</textarea>
+              </div>
+            </div>
+          </div>
+          <div class="flex gap8 mt8">
+            <button class="btn btn-ac btn-lg" id="sub-btn" onclick="doSubmit()" style="flex:1">🚀 Nộp bài</button>
+          </div>
+        `}
+      </div>
+      <div>
+        <div id="sub-result">
+          ${prev?renderResult(prev,a):`<div class="card" style="text-align:center;padding:30px">
+            <div style="font-size:2rem;margin-bottom:8px">📝</div>
+            <div class="c-mt" style="font-size:.87rem">Nộp code để nhận kết quả ngay lập tức</div>
+          </div>`}
+        </div>
+        ${prev?`<button class="btn btn-ghost btn-sm mt8" onclick="refreshResult('${aid}')" style="width:100%">🔄 Cập nhật điểm từ giáo viên</button>`:''}
+        ${a.criteria?`<div class="card mt12"><div class="ctitle">Tiêu chí chấm điểm</div><div style="font-size:.82rem;line-height:1.75;color:var(--mt2);white-space:pre-wrap">${a.criteria}</div></div>`:''}
+      </div>
+    </div>`;
+  showView('v-submit');
+  // Luôn fetch lại kết quả mới nhất từ DB (để cập nhật khi GV đã sửa điểm)
+  if (prev) {
+    sb.from('submissions').select('*')
+      .eq('assignment_id',aid).eq('student_id',ME.id)
+      .order('submitted_at',{ascending:false}).limit(1).maybeSingle()
+      .then(({data:fresh}) => {
+        if (fresh) document.getElementById('sub-result').innerHTML = renderResult(fresh, a);
+      });
+  }
+}
+
+function renderResult(s,a) {
+  const maxScore = a?.max_score || 10;
+  const isErr = s.compile_status === 'error';
+  const gradedByTeacher = s.graded_at != null;
+
+  const scoreHtml = s.score !== null
+    ? '<div class="score-big" style="color:'+(s.score>=maxScore*.5?'var(--ac)':'var(--red)')+'">'+
+        s.score+'<span style="font-size:1rem;font-weight:400;color:var(--mt2)"> / '+maxScore+'</span></div>'+
+        '<span class="badge '+(s.score>=maxScore*.5?'bg-g':'bg-r')+'">'+(s.score>=maxScore*.5?'✓ Đạt':'✗ Chưa đạt')+'</span>'+
+        (gradedByTeacher?'<div style="font-size:.72rem;color:var(--mt2);margin-top:4px">Giáo viên đã chấm</div>':'')
+    : '<div class="mt8"><span class="badge bg-y">⏳ Chờ giáo viên chấm điểm</span></div>';
+
+  const commentHtml = s.teacher_comment
+    ? '<div class="fbbox mt12"><div style="font-size:.68rem;color:var(--ac2);margin-bottom:4px;font-family:var(--mono);text-transform:uppercase;letter-spacing:.5px">Nhận xét GV</div>'+s.teacher_comment+'</div>'
+    : '';
+
+  const timeHtml = '<div class="c-mt mt8" style="font-size:.77rem">Nộp lúc: '+fdt(s.submitted_at)+'</div>';
+
+  if (isErr) {
+    const errLines = (s.compile_log||'').split('\n').filter(Boolean)
+      .map(function(e){ return '<div class="err-ln">✗ '+e+'</div>'; }).join('');
+    return '<div class="card"><div class="ctitle c-r">✗ Lỗi compile</div><div class="res-err">'+errLines+'</div>'+scoreHtml+commentHtml+timeHtml+'</div>';
+  }
+  return '<div class="card"><div class="ctitle c-g">✓ Compile thành công</div>'+scoreHtml+commentHtml+timeHtml+'</div>';
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('drop-zone').style.borderColor='var(--bd)';
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+}
+function handleFileSelect(e) { if (e.target.files[0]) setFile(e.target.files[0]); }
+function setFile(f) {
+  if (!f.name.endsWith('.ino') && !f.name.endsWith('.txt')) return toast('Chỉ nhận file .ino','err');
+  if (f.size > 5*1024*1024) return toast('File quá 5MB','err');
+  SEL_FILE = f;
+  const prev = document.getElementById('file-preview');
+  document.getElementById('file-name-display').textContent = f.name;
+  prev.style.display = 'flex';
+  document.getElementById('drop-zone').style.borderColor = 'var(--ac)';
+}
+function clearFile() {
+  SEL_FILE = null;
+  document.getElementById('file-input').value = '';
+  document.getElementById('file-preview').style.display = 'none';
+  document.getElementById('drop-zone').style.borderColor = 'var(--bd)';
+}
+
+function switchSubmitTab(tab) {
+  const isFile = tab === 'file';
+  document.getElementById('submit-tab-file').style.display = isFile ? '' : 'none';
+  document.getElementById('submit-tab-code').style.display = isFile ? 'none' : '';
+  document.getElementById('tab-file').className = 'btn ' + (isFile ? 'btn-ac' : 'btn-ghost') + ' btn-tab';
+  document.getElementById('tab-code').className = 'btn ' + (!isFile ? 'btn-ac' : 'btn-ghost') + ' btn-tab';
+  if (!isFile) SEL_FILE = null;
+}
+
+async function doSubmit() {
+  if (!ASN?.id) return toast('Lỗi: Không tìm thấy bài tập','err');
+  if (!ME?.id)  return toast('Lỗi: Chưa đăng nhập','err');
+
+  // Xác định chế độ: file hay paste code
+  const useFile = document.getElementById('submit-tab-file')?.style.display !== 'none';
+  let code = '', fileName = null, filePath = null;
+
+  if (useFile) {
+    if (!SEL_FILE) return toast('Vui lòng chọn file .ino','err');
+    code = await SEL_FILE.text();
+    fileName = SEL_FILE.name;
+  } else {
+    code = (document.getElementById('ta-code')?.value||'').trim();
+    if (!code) return toast('Vui lòng nhập code','err');
+  }
+
+  const {data:existing} = await sb.from('submissions')
+    .select('id').eq('assignment_id',ASN.id).eq('student_id',ME.id).maybeSingle();
+  if (existing) return toast('❌ Bạn đã nộp bài này rồi!','err');
+
+  setBL('sub-btn',true,'Đang kiểm tra...');
+  try {
+    const {ok,errors} = compileCheck(code);
+
+    // Upload file nếu dùng chế độ file
+    if (useFile) {
+      setBL('sub-btn',true,'Đang tải lên...');
+      filePath = ME.id+'/'+ASN.id+'/'+Date.now()+'_'+SEL_FILE.name;
+      const {error:upErr} = await sb.storage
+        .from('submissions').upload(filePath, SEL_FILE, {contentType:'text/plain', upsert:false});
+      if (upErr) { toast('Lỗi upload: '+upErr.message,'err'); return; }
+    }
+
+    const {error} = await sb.from('submissions').insert({
+      assignment_id: ASN.id,
+      student_id: ME.id,
+      code,
+      file_name: fileName,
+      file_url: filePath,
+      compile_status: ok?'ok':'error',
+      compile_log: ok?null:errors.join('\n'),
+      score: ok?null:0
+    });
+    if (error) { toast('Lỗi lưu: '+error.message,'err'); return; }
+
+    const {data:sub} = await sb.from('submissions').select('*')
+      .eq('assignment_id',ASN.id).eq('student_id',ME.id)
+      .order('submitted_at',{ascending:false}).limit(1).maybeSingle();
+    if (sub) document.getElementById('sub-result').innerHTML = renderResult(sub,ASN);
+    toast(ok?'✅ Nộp bài thành công!':'❌ Code có lỗi compile — điểm 0', ok?'ok':'err');
+
+  } catch(e) {
+    console.error('doSubmit error:',e);
+    toast('Lỗi: '+e.message,'err');
+  } finally {
+    setBL('sub-btn',false,'🚀 Nộp bài');
+  }
+}
+
+// ═══════════════════════════════════════
+// ARDUINO COMPILE CHECK
+// ═══════════════════════════════════════
+function compileCheck(code) {
+  const errs = [];
+  if (!code.trim()) return { ok: false, errors: ['Code trống'] };
+
+  // Xóa block comment /* ... */ trước khi xử lý
+  const stripped = code.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  // 1. Kiểm tra hàm bắt buộc
+  if (!/void\s+setup\s*\(\s*\)/.test(stripped)) errs.push('Thiếu hàm void setup()');
+  if (!/void\s+loop\s*\(\s*\)/.test(stripped))  errs.push('Thiếu hàm void loop()');
+
+  // 2. Kiểm tra dấu ngoặc nhọn {}
+  const op = (stripped.match(/\{/g)||[]).length;
+  const cl = (stripped.match(/\}/g)||[]).length;
+  if (op !== cl) errs.push(`Dấu {} không khớp (${op} mở / ${cl} đóng)`);
+
+  // 3. Kiểm tra dấu ngoặc tròn ()
+  const po = (stripped.match(/\(/g)||[]).length;
+  const pc = (stripped.match(/\)/g)||[]).length;
+  if (po !== pc) errs.push(`Dấu () không khớp (${po} mở / ${pc} đóng)`);
+
+  // 4. Kiểm tra dấu ; trên từng dòng (sau khi đã bỏ block comment)
+  const lines = stripped.split('\n');
+  lines.forEach((raw, i) => {
+    // Bỏ comment cuối dòng //
+    let line = raw.replace(/\/\/.*$/, '').trim();
+    if (!line) return;                     // dòng trống
+    if (/^[{}]/.test(line)) return;       // dòng bắt đầu bằng { }
+    if (line.endsWith('{') || line.endsWith('}')) return;
+    if (line.startsWith('#')) return;     // #include, #define
+    if (/[{};,:]$/.test(line)) return;   // đã kết thúc hợp lệ
+    if (/^\*/.test(line)) return;         // dòng trong block comment còn sót
+    // khai báo hàm: void/int/... tên(
+    if (/^(void|int|float|double|bool|char|long|byte|String|unsigned|auto)\s+\w+\s*\(/.test(line)) return;
+    // control flow không cần ;
+    if (/^(if|else\s*if|else|while|for|switch|do)\b/.test(line)) return;
+    // dòng chỉ là tên hàm khai báo kiểu return
+    if (/^(return|break|continue)\b.*[^;]$/.test(line)) {
+      errs.push(`Dòng ${i+1}: thiếu dấu ";" → ${raw.trim().slice(0,50)}`);
+      return;
+    }
+    // Dòng lệnh thông thường không có ;
+    errs.push(`Dòng ${i+1}: thiếu dấu ";" → ${raw.trim().slice(0,50)}`);
+  });
+
+  return { ok: errs.length === 0, errors: errs };
+}
+
+// ═══════════════════════════════════════
+// REFRESH RESULT (học sinh cập nhật điểm mới)
+// ═══════════════════════════════════════
+async function downloadFile(filePath, fileName) {
+  const {data, error} = await sb.storage.from('submissions').createSignedUrl(filePath, 300);
+  if (error) return toast('Lỗi tải file: '+error.message,'err');
+  const a = document.createElement('a');
+  a.href = data.signedUrl; a.download = fileName; a.click();
+}
+
+async function resetSubmission(subId) {
+  if (!confirm('Xóa bài nộp này để học sinh có thể nộp lại?')) return;
+  const {error} = await sb.from('submissions').delete().eq('id', subId);
+  if (error) return toast('Lỗi: ' + error.message, 'err');
+  toast('✅ Đã xóa bài nộp. Học sinh có thể nộp lại.');
+  tabGrades();
+}
+
+async function refreshResult(aid) {
+  const {data:sub} = await sb.from('submissions').select('*')
+    .eq('assignment_id', aid).eq('student_id', ME.id)
+    .order('submitted_at',{ascending:false}).limit(1).maybeSingle();
+  if (!sub) return toast('Chưa có bài nộp','err');
+  const {data:a} = await sb.from('assignments').select('*').eq('id',aid).single();
+  document.getElementById('sub-result').innerHTML = renderResult(sub, a||ASN);
+  toast('✅ Đã cập nhật kết quả');
+}
+
+// ═══════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════
+function gv(id)      { return (document.getElementById(id)?.value||'').trim(); }
+function clearV(ids) { ids.forEach(id=>{const e=document.getElementById(id);if(e)e.value='';}); }
+function esc(s)      { return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;'); }
+function fd(d)       { return d?new Date(d).toLocaleDateString('vi-VN'):'—'; }
+function fdt(d)      { if(!d)return'—'; const dt=new Date(d); return `${String(dt.getDate()).padStart(2,'0')}/${String(dt.getMonth()+1).padStart(2,'0')} ${String(dt.getHours()).padStart(2,'0')}:${String(dt.getMinutes()).padStart(2,'0')}`; }
+function ld()        { return `<div style="display:flex;justify-content:center;padding:30px"><div class="spin spin-md"></div></div>`; }
+function errBox(m)   { return `<div style="color:var(--red);padding:14px;font-size:.84rem">⚠ ${m}</div>`; }
+function emptyBox(i,m){ return `<div class="empty"><div class="ei">${i}</div><p>${m}</p></div>`; }
+function openM(id)   { document.getElementById(id).classList.add('open'); }
+function closeM(id)  { document.getElementById(id).classList.remove('open'); }
+
+function setBL(id,busy,txt) {
+  const e=document.getElementById(id);
+  if(!e)return;
+  e.disabled=busy;
+  e.innerHTML=busy?`<span class="spin spin-sm"></span> ${txt}`:txt;
+}
+
+// ═══════════════════════════════════════
+// THÔNG BÁO
+// ═══════════════════════════════════════
+
+const ANN_TYPES = {
+  general:  { icon:'📣', label:'Thông báo chung',  color:'var(--ac2)' },
+  document: { icon:'📄', label:'Tài liệu học tập', color:'var(--yw)'  },
+  video:    { icon:'🎬', label:'Video bài học',     color:'var(--red)' }
+};
+
+function toggleAnnFields() {
+  const t = document.getElementById('ann-type').value;
+  const area  = document.getElementById('ann-link-area');
+  const label = document.getElementById('ann-link-label');
+  area.style.display = (t==='document'||t==='video') ? '' : 'none';
+  if (t==='document') label.textContent = '🔗 Link tải tài liệu';
+  if (t==='video')    label.textContent = '🎬 Link video bài học';
+}
+
+// ── Giáo viên: điền select lớp khi mở modal ──
+async function openAnnounceModal(annId) {
+  // Load classes vào select
+  const {data:classes} = await sb.from('classes').select('id,name').eq('teacher_id',ME.id);
+  const sel = document.getElementById('ann-class');
+  sel.innerHTML = '<option value="">-- Tất cả các lớp --</option>'
+    + (classes||[]).map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+
+  if (annId) {
+    // Chế độ sửa
+    const r = GRADE_MAP['ann_'+annId];
+    if (r) {
+      document.getElementById('ann-modal-title').textContent = '✏️ Sửa thông báo';
+      document.getElementById('ann-type').value  = r.type||'general';
+      document.getElementById('ann-class').value = r.class_id||'';
+      document.getElementById('ann-title').value = r.title||'';
+      document.getElementById('ann-body').value  = r.body||'';
+      document.getElementById('ann-link').value  = r.link||'';
+      document.getElementById('ann-btn').onclick = ()=>submitAnnounce(annId);
+      toggleAnnFields();
+    }
+  } else {
+    document.getElementById('ann-modal-title').textContent = '📢 Đăng thông báo';
+    document.getElementById('ann-btn').onclick = ()=>submitAnnounce(null);
+    document.getElementById('ann-type').value = 'general';
+    clearV(['ann-title','ann-body','ann-link']);
+    document.getElementById('ann-class').value = '';
+    toggleAnnFields();
+  }
+  openM('m-announce');
+}
+
+// ── Giáo viên: đăng / sửa thông báo ──
+async function submitAnnounce(editId) {
+  const type    = document.getElementById('ann-type').value;
+  const classId = document.getElementById('ann-class').value || null;
+  const title   = gv('ann-title');
+  const body    = (document.getElementById('ann-body').value||'').trim();
+  const link    = (document.getElementById('ann-link').value||'').trim();
+  if (!title) return toast('Nhập tiêu đề thông báo','err');
+  if ((type==='document'||type==='video') && !link) return toast('Nhập link tài liệu/video','err');
+
+  setBL('ann-btn',true,'Đang đăng...');
+  const payload = { type, class_id: classId, title, body: body||null, link: link||null, teacher_id: ME.id };
+  let error;
+  if (editId) {
+    ({error} = await sb.from('announcements').update(payload).eq('id',editId));
+  } else {
+    ({error} = await sb.from('announcements').insert(payload));
+  }
+  setBL('ann-btn',false,'📤 Đăng thông báo');
+  if (error) return toast('Lỗi: '+error.message,'err');
+  toast(editId ? '✅ Đã cập nhật thông báo' : '✅ Đã đăng thông báo!');
+  closeM('m-announce');
+  loadAnnounceTeacher();
+}
+
+// ── Giáo viên: xem danh sách thông báo đã đăng ──
+async function loadAnnounceTeacher() {
+  const el = document.getElementById('g-announce-teacher');
+  el.innerHTML = ld();
+  const {data, error} = await sb.from('announcements')
+    .select('*, class:classes(name)')
+    .eq('teacher_id', ME.id)
+    .order('created_at', {ascending:false});
+  if (error) return el.innerHTML = errBox(error.message);
+  if (!data?.length) return el.innerHTML = emptyBox('📢','Chưa có thông báo nào. Hãy đăng thông báo đầu tiên!');
+  data.forEach(r => { GRADE_MAP['ann_'+r.id] = r; });
+  el.innerHTML = data.map(r => renderAnnCard(r, true)).join('');
+}
+
+// ── Học sinh: xem thông báo từ GV các lớp đang học ──
+async function loadAnnounceStudent() {
+  const el = document.getElementById('g-announce-student');
+  el.innerHTML = ld();
+
+  const {data:enrols} = await sb.from('enrollments').select('class_id').eq('student_id',ME.id);
+  if (!enrols?.length) return el.innerHTML = emptyBox('📢','Bạn chưa tham gia lớp học nào');
+
+  const classIds = enrols.map(e=>e.class_id);
+  // Lấy thông báo: gửi đến lớp mình HOẶC gửi tất cả lớp (class_id = null) của GV dạy mình
+  const {data:teachers} = await sb.from('classes').select('teacher_id').in('id', classIds);
+  const teacherIds = [...new Set((teachers||[]).map(t=>t.teacher_id))];
+
+  const {data, error} = await sb.from('announcements')
+    .select('*, class:classes(name), teacher:profiles!teacher_id(full_name)')
+    .or(`class_id.in.(${classIds.join(',')}),and(class_id.is.null,teacher_id.in.(${teacherIds.join(',')}))`)
+    .order('created_at', {ascending:false});
+
+  if (error) return el.innerHTML = errBox(error.message);
+  if (!data?.length) return el.innerHTML = emptyBox('📢','Chưa có thông báo nào từ giáo viên');
+  data.forEach(r => { GRADE_MAP['ann_'+r.id] = r; });
+  el.innerHTML = data.map(r => renderAnnCard(r, false)).join('');
+}
+
+// ── Render card thông báo ──
+function renderAnnCard(r, isTeacher) {
+  const t = ANN_TYPES[r.type]||ANN_TYPES.general;
+  const classLabel = r.class?.name
+    ? `<span style="background:rgba(59,158,255,.12);color:var(--ac2);border:1px solid rgba(59,158,255,.25);border-radius:4px;padding:1px 7px;font-size:.72rem">${r.class.name}</span>`
+    : `<span style="background:rgba(0,229,160,.1);color:var(--ac);border:1px solid rgba(0,229,160,.2);border-radius:4px;padding:1px 7px;font-size:.72rem">Tất cả lớp</span>`;
+  const authorLine = !isTeacher ? `<span class="tmt" style="font-size:.75rem">GV: ${r.teacher?.full_name||'?'} · </span>` : '';
+
+  const linkBtn = r.link ? (
+    r.type==='video'
+      ? `<a href="${r.link}" target="_blank" class="btn btn-red btn-sm" style="text-decoration:none;margin-top:10px">🎬 Xem video</a>`
+      : `<a href="${r.link}" target="_blank" class="btn btn-sec btn-sm" style="text-decoration:none;margin-top:10px">📥 Tải tài liệu</a>`
+  ) : '';
+
+  const actions = isTeacher ? `
+    <div style="display:flex;gap:6px;margin-top:12px;border-top:1px solid var(--bd);padding-top:10px">
+      <button class="btn btn-ghost btn-sm" onclick="openAnnounceModal('${r.id}')">✏️ Sửa</button>
+      <button class="btn btn-red btn-sm" onclick="deleteAnnounce('${r.id}')">🗑 Xóa</button>
+      ${linkBtn}
+    </div>` : `<div style="margin-top:10px">${linkBtn}</div>`;
+
+  return `<div class="card" style="padding:16px;margin-bottom:12px;border-left:3px solid ${t.color}">
+    <div style="display:flex;align-items:flex-start;gap:12px">
+      <div style="font-size:1.6rem;line-height:1;margin-top:2px">${t.icon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+          <span style="font-weight:600;font-size:.95rem">${r.title}</span>
+          ${classLabel}
+          <span style="font-size:.72rem;color:var(--mt2);margin-left:auto">${fdt(r.created_at)}</span>
+        </div>
+        <div style="font-size:.78rem;color:var(--mt2);margin-bottom:6px">${authorLine}<span style="color:${t.color}">${t.label}</span></div>
+        ${r.body ? `<div style="font-size:.86rem;line-height:1.75;color:var(--mt2);white-space:pre-wrap">${r.body}</div>` : ''}
+        ${actions}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Giáo viên: xóa thông báo ──
+async function deleteAnnounce(id) {
+  if (!confirm('Xóa thông báo này?')) return;
+  await sb.from('announcements').delete().eq('id',id);
+  toast('Đã xóa thông báo'); loadAnnounceTeacher();
+}
+
+// ═══════════════════════════════════════
+// XIN NGHỈ HỌC
+// ═══════════════════════════════════════
+
+const ABS_STATUS = {
+  pending:  { label:'⏳ Chờ duyệt', cls:'bg-y' },
+  approved: { label:'✅ Đã duyệt',  cls:'bg-g' },
+  rejected: { label:'✗ Từ chối',   cls:'bg-r' }
+};
+
+// ── Học sinh: load danh sách đơn đã gửi ──
+async function loadAbsenceStudent() {
+  const el = document.getElementById('g-absence');
+  el.innerHTML = ld();
+
+  const {data:enrols} = await sb.from('enrollments')
+    .select('class_id, class:classes(id,name,teacher:profiles!teacher_id(full_name))')
+    .eq('student_id', ME.id);
+
+  // Điền select lớp trong modal
+  const sel = document.getElementById('ab-class');
+  sel.innerHTML = '<option value="">-- Chọn lớp --</option>'
+    + (enrols||[]).map(e=>`<option value="${e.class_id}">${e.class?.name||e.class_id}</option>`).join('');
+
+  const {data:reqs, error} = await sb.from('absence_requests')
+    .select('*, class:classes(name, teacher:profiles!teacher_id(full_name))')
+    .eq('student_id', ME.id)
+    .order('created_at', {ascending:false});
+
+  if (error) return el.innerHTML = errBox(error.message);
+  if (!reqs?.length) return el.innerHTML = emptyBox('📅','Bạn chưa có đơn xin nghỉ nào');
+
+  el.innerHTML = `<div class="card" style="padding:0;overflow:hidden"><div class="tscroll"><table>
+    <thead><tr><th>Lớp</th><th>Ngày nghỉ</th><th>Lý do</th><th>Trạng thái</th><th>Ghi chú GV</th><th>Gửi lúc</th></tr></thead>
+    <tbody>${reqs.map(r=>{
+      const st = ABS_STATUS[r.status]||ABS_STATUS.pending;
+      return `<tr>
+        <td><strong>${r.class?.name||'?'}</strong><br><span class="tmt" style="font-size:.75rem">GV: ${r.class?.teacher?.full_name||'?'}</span></td>
+        <td class="c-mono">${fd(r.absence_date)}</td>
+        <td style="max-width:220px;white-space:pre-wrap;font-size:.82rem">${r.reason}</td>
+        <td><span class="badge ${st.cls}">${st.label}</span></td>
+        <td style="font-size:.82rem;color:var(--mt2)">${r.teacher_note||'—'}</td>
+        <td class="tmt" style="font-size:.78rem">${fdt(r.created_at)}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+
+// ── Học sinh: gửi đơn ──
+async function submitAbsence() {
+  const classId = document.getElementById('ab-class').value;
+  const date    = document.getElementById('ab-date').value;
+  const reason  = (document.getElementById('ab-reason').value||'').trim();
+  if (!classId) return toast('Chọn lớp học','err');
+  if (!date)    return toast('Chọn ngày nghỉ','err');
+  if (!reason)  return toast('Nhập lý do xin nghỉ','err');
+
+  // Kiểm tra đã gửi đơn cho ngày này chưa
+  const {data:exist} = await sb.from('absence_requests')
+    .select('id').eq('student_id',ME.id).eq('class_id',classId).eq('absence_date',date).maybeSingle();
+  if (exist) return toast('Bạn đã gửi đơn cho ngày này rồi','err');
+
+  setBL('ab-btn',true,'Đang gửi...');
+  const {error} = await sb.from('absence_requests').insert({
+    student_id: ME.id, class_id: classId, absence_date: date, reason
+  });
+  setBL('ab-btn',false,'📤 Gửi đơn');
+  if (error) return toast('Lỗi: '+error.message,'err');
+  toast('✅ Đã gửi đơn xin nghỉ!');
+  closeM('m-absence');
+  clearV(['ab-date','ab-reason']);
+  loadAbsenceStudent();
+}
+
+// ── Giáo viên: load tất cả đơn của các lớp mình dạy ──
+async function loadAbsenceTeacher() {
+  const el = document.getElementById('g-absence-teacher');
+  el.innerHTML = ld();
+  const filter = document.getElementById('abs-filter')?.value || 'all';
+
+  const {data:classes} = await sb.from('classes').select('id').eq('teacher_id',ME.id);
+  if (!classes?.length) return el.innerHTML = emptyBox('📋','Bạn chưa có lớp học nào');
+
+  let q = sb.from('absence_requests')
+    .select('*, student:profiles!student_id(full_name), class:classes(name)')
+    .in('class_id', classes.map(c=>c.id))
+    .order('created_at', {ascending:false});
+  if (filter !== 'all') q = q.eq('status', filter);
+
+  const {data:reqs, error} = await q;
+  if (error) return el.innerHTML = errBox(error.message);
+  if (!reqs?.length) return el.innerHTML = emptyBox('📋','Không có đơn xin nghỉ nào');
+
+  // Lưu vào map để dùng trong onclick
+  reqs.forEach(r => { GRADE_MAP['abs_'+r.id] = r; });
+
+  // Đếm chờ duyệt
+  const pending = reqs.filter(r=>r.status==='pending').length;
+  const summary = pending ? `<div style="margin-bottom:12px;padding:10px 14px;background:rgba(255,201,77,.08);border:1px solid rgba(255,201,77,.25);border-radius:8px;font-size:.84rem;color:var(--yw)">⏳ Có <strong>${pending}</strong> đơn đang chờ duyệt</div>` : '';
+
+  el.innerHTML = summary + `<div class="card" style="padding:0;overflow:hidden"><div class="tscroll"><table>
+    <thead><tr><th>Học sinh</th><th>Lớp</th><th>Ngày nghỉ</th><th>Lý do</th><th>Trạng thái</th><th>Gửi lúc</th><th></th></tr></thead>
+    <tbody>${reqs.map(r=>{
+      const st = ABS_STATUS[r.status]||ABS_STATUS.pending;
+      const btn = r.status==='pending'
+        ? `<button class="btn btn-sec btn-sm" onclick="openReviewAbs('abs_${r.id}')">Duyệt</button>`
+        : `<button class="btn btn-ghost btn-sm" onclick="openReviewAbs('abs_${r.id}')">Sửa</button>`;
+      return `<tr>
+        <td><strong>${r.student?.full_name||'?'}</strong></td>
+        <td class="tmt" style="font-size:.82rem">${r.class?.name||'?'}</td>
+        <td class="c-mono">${fd(r.absence_date)}</td>
+        <td style="max-width:200px;white-space:pre-wrap;font-size:.82rem">${r.reason}</td>
+        <td><span class="badge ${st.cls}">${st.label}</span></td>
+        <td class="tmt" style="font-size:.78rem">${fdt(r.created_at)}</td>
+        <td>${btn}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table></div></div>`;
+}
+
+// ── Giáo viên: mở modal duyệt ──
+let CUR_ABS_ID = null;
+function openReviewAbs(mapKey) {
+  const r = GRADE_MAP[mapKey];
+  if (!r) return toast('Không tìm thấy đơn','err');
+  CUR_ABS_ID = r.id;
+  const st = ABS_STATUS[r.status]||ABS_STATUS.pending;
+  document.getElementById('rab-info').innerHTML =
+    `<div><span class="tmt">Học sinh:</span> <strong>${r.student?.full_name||'?'}</strong></div>
+     <div><span class="tmt">Lớp:</span> ${r.class?.name||'?'}</div>
+     <div><span class="tmt">Ngày nghỉ:</span> <strong class="c-mono">${fd(r.absence_date)}</strong></div>
+     <div><span class="tmt">Lý do:</span> ${r.reason}</div>
+     <div><span class="tmt">Trạng thái hiện tại:</span> <span class="badge ${st.cls}" style="font-size:.75rem">${st.label}</span></div>`;
+  document.getElementById('rab-note').value = r.teacher_note||'';
+  openM('m-review-abs');
+}
+
+// ── Giáo viên: lưu kết quả duyệt ──
+async function reviewAbsence(status) {
+  if (!CUR_ABS_ID) return;
+  const note = (document.getElementById('rab-note').value||'').trim();
+  const btnId = status==='approved' ? 'rab-approve' : 'rab-reject';
+  setBL(btnId, true, status==='approved'?'Đang duyệt...':'Đang từ chối...');
+  const {error} = await sb.from('absence_requests').update({
+    status, teacher_note: note||null, reviewed_by: ME.id, reviewed_at: new Date().toISOString()
+  }).eq('id', CUR_ABS_ID);
+  setBL(btnId, false, status==='approved'?'✅ Duyệt':'✗ Từ chối');
+  if (error) return toast('Lỗi: '+error.message,'err');
+  toast(status==='approved'?'✅ Đã duyệt đơn':'Đã từ chối đơn');
+  closeM('m-review-abs');
+  loadAbsenceTeacher();
+}
+
+let _tt;
+function toast(msg,type='ok'){
+  const e=document.getElementById('toast');
+  e.textContent=msg;
+  e.style.borderLeftColor=type==='err'?'var(--red)':'var(--ac)';
+  e.classList.add('show');
+  clearTimeout(_tt);
+  _tt=setTimeout(()=>e.classList.remove('show'),3200);
+}
+</script>
+</body>
+</html>
