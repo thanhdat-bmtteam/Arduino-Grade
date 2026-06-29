@@ -733,7 +733,7 @@ function openCreateUser() {
   };
 }
 /* Hiện thông tin đăng nhập vừa tạo để admin copy gửi cho người dùng */
-function showCredentials(info) {
+function showCredentials(info, onDone) {
   const roleLbl = info.role === "teacher" ? "Giáo viên" : info.role === "admin" ? "Admin" : "Học sinh";
   const combined = `Tài khoản ${roleLbl} — ${SITE}\nEmail: ${info.email}\nMật khẩu: ${info.pass}`;
   showModal("Đã tạo tài khoản ✅", `
@@ -758,7 +758,7 @@ function showCredentials(info) {
   modalRoot().querySelectorAll("[data-copy]").forEach((b) =>
     b.onclick = () => copyText(document.getElementById(b.dataset.copy).textContent, b));
   document.getElementById("cr-all").onclick = (e) => { e.target.select(); };
-  document.getElementById("cr-done").onclick = () => { closeModal(); adminUsers(); };
+  document.getElementById("cr-done").onclick = () => { closeModal(); (onDone || adminUsers)(); };
 }
 
 async function adminClasses() {
@@ -860,10 +860,11 @@ async function adminRegs() {
       <td>${r.has_computer === true ? '<span class="badge green">Có máy</span>' : r.has_computer === false ? '<span class="badge gray">Không</span>' : "—"}</td>
       <td class="meta">${esc(r.note || "")}</td>
       <td><span class="badge ${stt[r.status][1]}">${stt[r.status][0]}</span></td>
-      <td>
+      <td style="white-space:nowrap">
         <select data-reg="${r.id}" class="sm">
           ${Object.entries(stt).map(([k, val]) => `<option value="${k}" ${r.status === k ? "selected" : ""}>${val[0]}</option>`).join("")}
         </select>
+        ${r.status !== "enrolled" ? `<button class="btn success sm" data-approve="${r.id}" style="margin-top:6px">Duyệt & tạo TK</button>` : ""}
       </td>
     </tr>`).join("");
   setContent(`
@@ -872,11 +873,47 @@ async function adminRegs() {
       <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Cập nhật</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
     </table></div>`);
+  const regMap = {}; (data || []).forEach((r) => { regMap[r.id] = r; });
+  on("[data-approve]", "click", (e) => approveRegToAccount(regMap[e.currentTarget.dataset.approve]));
   on("[data-reg]", "change", async (e) => {
     const { error } = await sb.from("course_registrations").update({ status: e.target.value }).eq("id", e.target.dataset.reg);
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã cập nhật", "ok"); adminRegs();
   });
+}
+
+/* Duyệt hồ sơ -> tạo tài khoản học sinh + thêm vào lớp đã chọn + hiện mật khẩu để copy */
+async function approveRegToAccount(reg) {
+  if (!reg) return;
+  const email = (reg.email || "").trim();
+  if (!email) return toast("Hồ sơ này không có email — không tạo được tài khoản. Hãy tạo thủ công ở mục Tài khoản.", "err");
+  if (!confirm(`Tạo tài khoản học sinh cho "${reg.full_name}" (${email})` + (reg.class_id ? ` và thêm vào lớp "${esc(reg.course_name || "")}"` : "") + "?")) return;
+  const pass = Math.random().toString(36).slice(2, 10);
+  let userId = null, created = true;
+  try {
+    const u = await adminCreateUser(email, pass, reg.full_name, "student");
+    userId = u && u.id;
+  } catch (err) {
+    if (/registered|already|exists/i.test(err.message || "")) {
+      const { data: p } = await sb.from("profiles").select("id").eq("email", email).maybeSingle();
+      if (!p) return toast("Email đã tồn tại nhưng chưa có hồ sơ — hãy xử lý thủ công.", "err");
+      userId = p.id; created = false;
+    } else {
+      return toast("Lỗi tạo tài khoản: " + err.message, "err");
+    }
+  }
+  // Thêm vào lớp đã chọn lúc đăng ký (nếu có); bỏ qua nếu đã ở trong lớp
+  if (reg.class_id && userId) {
+    const { error: me } = await sb.from("class_members").insert({ class_id: reg.class_id, student_id: userId });
+    if (me && !/duplicate|unique/i.test(me.message || "")) toast("Lưu ý: không thêm được vào lớp (" + me.message + ")", "err");
+  }
+  await sb.from("course_registrations").update({ status: "enrolled" }).eq("id", reg.id);
+  if (created) {
+    showCredentials({ name: reg.full_name, email, pass, role: "student" }, adminRegs);
+  } else {
+    toast("Tài khoản đã tồn tại từ trước — đã ghi danh & thêm vào lớp. Dùng 'Đặt lại MK' nếu cần.", "ok");
+    adminRegs();
+  }
 }
 
 /* ============================================================================
