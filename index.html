@@ -1567,25 +1567,41 @@ async function loadAttendance(cid, date) {
     sb.from("attendance").select("*").eq("class_id", cid).eq("session_date", date),
   ]);
   const exMap = {}; (existing || []).forEach((a) => exMap[a.student_id] = a);
+  const taken = (existing || []).length > 0;
+  const lastTime = taken ? existing.reduce((m, a) => a.created_at > m ? a.created_at : m, existing[0].created_at) : null;
+  const LBL = { present: "Có mặt", late: "Đi trễ", absent: "Vắng", excused: "Vắng phép" };
   const opts = (cur) => ["present", "late", "absent", "excused"].map((s) =>
-    `<option value="${s}" ${cur === s ? "selected" : ""}>${{ present: "Có mặt", late: "Đi trễ", absent: "Vắng", excused: "Vắng phép" }[s]}</option>`).join("");
+    `<option value="${s}" ${cur === s ? "selected" : ""}>${LBL[s]}</option>`).join("");
   const rows = (members || []).map((m) => {
-    const st = m.student; const cur = exMap[st.id]?.status || "present";
+    const st = m.student; const saved = exMap[st.id]; const cur = saved?.status || "present";
     return `<tr><td>${esc(st.full_name)}</td>
-      <td><select data-att="${st.id}">${opts(cur)}</select></td></tr>`;
+      <td><select data-att="${st.id}">${opts(cur)}</select></td>
+      <td>${saved ? `<span class="badge green">✓ đã ghi</span>` : `<span class="badge gray">chưa ghi</span>`}</td></tr>`;
   }).join("");
-  wrap.innerHTML = `<div class="table-wrap" style="margin-top:10px"><table><thead><tr><th>Học sinh</th><th>Trạng thái</th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="2" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>
-    <button class="btn" id="att-save" style="margin-top:12px">Lưu điểm danh ${fmtDate(date)}</button>`;
-  document.getElementById("att-save").onclick = async (e) => {
+  const banner = taken
+    ? `<div class="card" style="margin:0 0 12px;background:#dcfce7;border-color:#bbf7d0">
+        <b style="color:#15803d">✅ Đã điểm danh ngày ${fmtDate(date)}</b>
+        <div class="meta">${(existing || []).length} học sinh • lần lưu gần nhất: ${fmtDT(lastTime)}. Có thể chỉnh lại rồi lưu để cập nhật.</div></div>`
+    : `<div class="card" style="margin:0 0 12px;background:#fef0d6;border-color:#fde3a7">
+        <b style="color:#92590a">⚠️ Chưa điểm danh ngày ${fmtDate(date)}</b>
+        <div class="meta">Chọn trạng thái cho từng học sinh rồi bấm "Lưu điểm danh".</div></div>`;
+  wrap.innerHTML = banner +
+    `<div class="table-wrap"><table><thead><tr><th>Học sinh</th><th>Trạng thái</th><th>Ghi nhận</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="3" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>
+    <button class="btn" id="att-save" style="margin-top:12px">${taken ? "Cập nhật điểm danh" : "Lưu điểm danh"} ${fmtDate(date)}</button>`;
+  const saveBtn = document.getElementById("att-save");
+  if (saveBtn) saveBtn.onclick = async (e) => {
+    if (!(members || []).length) return;
     e.target.disabled = true; e.target.textContent = "Đang lưu...";
+    const now = new Date().toISOString();
     const records = (members || []).map((m) => ({
       class_id: cid, student_id: m.student.id, session_date: date,
-      status: wrap.querySelector(`[data-att="${m.student.id}"]`).value,
+      status: wrap.querySelector(`[data-att="${m.student.id}"]`).value, created_at: now,
     }));
     const { error } = await sb.from("attendance").upsert(records, { onConflict: "class_id,student_id,session_date" });
-    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; e.target.textContent = "Lưu điểm danh"; return; }
-    toast("Đã lưu điểm danh", "ok"); e.target.disabled = false; e.target.textContent = "Lưu điểm danh " + fmtDate(date);
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast(`Đã lưu điểm danh ${fmtDate(date)} lúc ${new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })}`, "ok");
+    loadAttendance(cid, date); // tải lại để hiện dấu hiệu đã điểm danh
   };
 }
 
