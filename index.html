@@ -1422,7 +1422,10 @@ async function teacherAssignmentDetail(a) {
       <td>${esc(st.full_name)}<div class="meta">${fmtDT(s.submitted_at)}</div></td>
       <td>${view}</td>
       <td><input type="number" data-score="${s.id}" value="${s.score ?? ""}" style="width:80px" placeholder="đ"/></td>
-      <td><button class="btn sm" data-save="${s.id}">Lưu</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn sm" data-save="${s.id}">Lưu</button>
+        <button class="btn danger sm" data-resub="${s.id}" data-name="${esc(st.full_name)}">Xoá để làm lại</button>
+      </td>
     </tr>`;
   }).join("");
   body.innerHTML = `
@@ -1450,6 +1453,14 @@ async function teacherAssignmentDetail(a) {
   on("[data-view]", "click", (e) => {
     const s = subMap[e.currentTarget.dataset.view];
     showModal("Bài làm — " + esc(s.student?.full_name || ""), `<textarea class="code" readonly style="min-height:300px">${esc(s.content)}</textarea>${s.auto_feedback ? `<p class="meta" style="white-space:pre-wrap">${esc(s.auto_feedback)}</p>` : ""}`, `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  }, body);
+  on("[data-resub]", "click", async (e) => {
+    const name = e.currentTarget.dataset.name;
+    if (!confirm(`Xoá bài nộp của "${name}" để cho làm lại?\nĐiểm & nội dung đã nộp của bài này sẽ bị xoá.`)) return;
+    const { error } = await sb.from("submissions").delete().eq("id", e.currentTarget.dataset.resub);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã xoá — học sinh có thể làm lại", "ok");
+    teacherAssignmentDetail(a);
   }, body);
 }
 
