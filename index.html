@@ -1246,7 +1246,7 @@ async function openAssignmentModal(cid, existingId) {
     existing = a;
     if (a && a.type === "quiz") {
       const { data: qs } = await sb.from("quiz_questions").select("*").eq("assignment_id", existingId).order("position");
-      existingQuiz = (qs || []).map((q) => ({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: q.points }));
+      existingQuiz = (qs || []).map((q) => ({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: q.points, question_image: q.question_image || "", option_a_image: q.option_a_image || "", option_b_image: q.option_b_image || "", option_c_image: q.option_c_image || "", option_d_image: q.option_d_image || "" }));
     }
   }
   const ex = existing || {};
@@ -1282,12 +1282,23 @@ async function openAssignmentModal(cid, existingId) {
   const typeSel = document.getElementById("ag-type");
   let quiz = existingQuiz.slice();
   const renderQuiz = () => {
+    const imgBox = (i, field, label) => {
+      const url = quiz[i][field];
+      return `<div style="margin-top:4px">
+        <input type="file" accept="image/*" data-q="${i}" data-img="${field}" style="font-size:12px" />
+        ${url ? `<div style="margin-top:4px"><img src="${esc(url)}" style="max-height:90px;border-radius:6px;border:1px solid var(--line)" />
+          <button class="btn ghost sm" type="button" data-q="${i}" data-imgrm="${field}">Xoá ảnh</button></div>` : ""}
+      </div>`;
+    };
     document.getElementById("quiz-list").innerHTML = quiz.map((q, i) => `
       <div class="q-card">
         <div style="display:flex;justify-content:space-between"><b>Câu ${i + 1}</b><button class="btn ghost sm" data-rmq="${i}" type="button">Xoá</button></div>
-        <div class="field"><input data-q="${i}" data-f="question" value="${esc(q.question)}" placeholder="Nội dung câu hỏi" /></div>
+        <div class="field"><input data-q="${i}" data-f="question" value="${esc(q.question)}" placeholder="Nội dung câu hỏi (có thể để trống nếu dùng ảnh)" />
+          <label style="margin-top:6px">Ảnh đề (không bắt buộc)</label>${imgBox(i, "question_image")}</div>
         <div class="row">
-          ${["a", "b", "c", "d"].map((o) => `<div class="field"><label>${o.toUpperCase()}</label><input data-q="${i}" data-f="option_${o}" value="${esc(q["option_" + o])}" /></div>`).join("")}
+          ${["a", "b", "c", "d"].map((o) => `<div class="field"><label>${o.toUpperCase()}</label>
+            <input data-q="${i}" data-f="option_${o}" value="${esc(q["option_" + o])}" placeholder="Đáp án ${o.toUpperCase()}" />
+            ${imgBox(i, "option_" + o + "_image")}</div>`).join("")}
         </div>
         <div class="row">
           <div class="field"><label>Đáp án đúng</label><select data-q="${i}" data-f="correct_option">${["A", "B", "C", "D"].map((c) => `<option value="${c}" ${q.correct_option === c ? "selected" : ""}>${c}</option>`).join("")}</select></div>
@@ -1295,9 +1306,17 @@ async function openAssignmentModal(cid, existingId) {
         </div>
       </div>`).join("");
     document.querySelectorAll("[data-rmq]").forEach((b) => b.onclick = () => { quiz.splice(+b.dataset.rmq, 1); renderQuiz(); });
-    document.querySelectorAll("[data-q]").forEach((inp) => inp.oninput = () => { quiz[+inp.dataset.q][inp.dataset.f] = inp.value; });
+    document.querySelectorAll("[data-f]").forEach((inp) => inp.oninput = () => { quiz[+inp.dataset.q][inp.dataset.f] = inp.value; });
+    document.querySelectorAll("[data-imgrm]").forEach((b) => b.onclick = () => { quiz[+b.dataset.q][b.dataset.imgrm] = ""; renderQuiz(); });
+    document.querySelectorAll("[data-img]").forEach((inp) => inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      const i = +inp.dataset.q, field = inp.dataset.img;
+      toast("Đang tải ảnh...", "");
+      try { quiz[i][field] = await uploadFile(f, "quiz"); renderQuiz(); }
+      catch (err) { toast("Lỗi tải ảnh: " + err.message, "err"); }
+    });
   };
-  document.getElementById("add-q").onclick = () => { quiz.push({ question: "", option_a: "", option_b: "", option_c: "", option_d: "", correct_option: "A", points: 1 }); renderQuiz(); };
+  document.getElementById("add-q").onclick = () => { quiz.push({ question: "", option_a: "", option_b: "", option_c: "", option_d: "", correct_option: "A", points: 1, question_image: "", option_a_image: "", option_b_image: "", option_c_image: "", option_d_image: "" }); renderQuiz(); };
   const syncType = () => {
     document.getElementById("ag-arduino").classList.toggle("hidden", typeSel.value !== "arduino");
     document.getElementById("ag-quiz").classList.toggle("hidden", typeSel.value !== "quiz");
@@ -1333,7 +1352,7 @@ async function openAssignmentModal(cid, existingId) {
         asgId = asg.id;
       }
       if (type === "quiz") {
-        const qrows = quiz.map((q, i) => ({ assignment_id: asgId, position: i, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: Number(q.points) || 1 }));
+        const qrows = quiz.map((q, i) => ({ assignment_id: asgId, position: i, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: Number(q.points) || 1, question_image: q.question_image || "", option_a_image: q.option_a_image || "", option_b_image: q.option_b_image || "", option_c_image: q.option_c_image || "", option_d_image: q.option_d_image || "" }));
         const { error: qe } = await sb.from("quiz_questions").insert(qrows);
         if (qe) throw qe;
       }
@@ -1374,8 +1393,10 @@ async function studentAssignmentDetail(a) {
   if (a.type === "quiz") {
     const { data: qs } = await sb.from("quiz_questions").select("*").eq("assignment_id", a.id).order("position");
     inner += qs.map((q, i) => `<div class="q-card"><b>Câu ${i + 1}.</b> ${esc(q.question)}
-      ${["a", "b", "c", "d"].filter((o) => q["option_" + o]).map((o) => `
-        <label class="opt"><input type="radio" name="q-${q.id}" value="${o.toUpperCase()}"/> <b>${o.toUpperCase()}.</b> ${esc(q["option_" + o])}</label>`).join("")}</div>`).join("");
+      ${q.question_image ? `<div><img src="${esc(q.question_image)}" style="max-width:100%;max-height:280px;border-radius:8px;margin:8px 0"/></div>` : ""}
+      ${["a", "b", "c", "d"].filter((o) => q["option_" + o] || q["option_" + o + "_image"]).map((o) => `
+        <label class="opt"><input type="radio" name="q-${q.id}" value="${o.toUpperCase()}"/> <b>${o.toUpperCase()}.</b> ${esc(q["option_" + o] || "")}
+        ${q["option_" + o + "_image"] ? `<img src="${esc(q["option_" + o + "_image"])}" style="max-height:110px;border-radius:6px;margin-left:6px;vertical-align:middle"/>` : ""}</label>`).join("")}</div>`).join("");
     inner += closed ? `<div class="empty">Đã đóng — không thể nộp.</div>` : `<button class="btn block" id="quiz-submit">Nộp bài</button>`;
     body.innerHTML = inner;
     if (!closed) document.getElementById("quiz-submit").onclick = async (e) => {
