@@ -307,6 +307,15 @@ function showModal(title, body, foot = "", size = "") {
 }
 function closeModal() { modalRoot().innerHTML = ""; }
 function loadingHTML() { return `<div class="center-load"><span class="loader"></span></div>`; }
+function downloadCSV(filename, rows) {
+  const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const csv = "\uFEFF" + rows.map((r) => r.map(cell).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
 function badgeRole(r) {
   return r === "admin" ? `<span class="badge red">Admin</span>`
     : r === "teacher" ? `<span class="badge blue">Giáo viên</span>`
@@ -1109,19 +1118,29 @@ async function tabAssignments(cid, isTeacher) {
         <div><b>${esc(a.title)}</b>
           <span class="badge blue">${TYPE_LABEL[a.type]}</span>
           <span class="badge ${sc}">${stx}</span></div>
-        ${isTeacher ? `<button class="btn ghost sm" data-delg="${a.id}">Xoá</button>` : ""}
+        ${isTeacher ? `<div style="display:flex;gap:6px">
+          <button class="btn ghost sm" data-edit="${a.id}">Sửa</button>
+          <button class="btn ghost sm" data-delg="${a.id}">Xoá</button></div>` : ""}
       </div>
       <div class="meta" style="margin-top:6px">Mở: ${fmtDT(a.open_time)} • Đóng: ${fmtDT(a.close_time)} • Tối đa ${a.max_score}đ</div>
       ${a.description ? `<p class="muted" style="margin:6px 0 0">${esc(a.description).slice(0, 140)}</p>` : ""}
     </div>`;
   }).join("");
   tabc().innerHTML = `
-    ${isTeacher ? `<button class="btn" id="new-asg" style="margin-bottom:14px">+ Giao bài tập</button>` : ""}
+    ${isTeacher ? `<div class="pill-row"><button class="btn" id="new-asg">+ Giao bài tập</button>
+      <button class="btn secondary" id="exp-grades">⬇ Tải bảng điểm lớp (CSV)</button></div>` : ""}
     ${items || `<div class="empty"><div class="em">📝</div><p>Chưa có bài tập.</p></div>`}`;
-  if (isTeacher) document.getElementById("new-asg").onclick = () => openAssignmentModal(cid);
+  if (isTeacher) {
+    document.getElementById("new-asg").onclick = () => openAssignmentModal(cid);
+    document.getElementById("exp-grades").onclick = () => exportClassGrades(cid, state.params.name);
+  }
   on("[data-asg]", "click", (e) => {
-    if (e.target.dataset.delg) return;
+    if (e.target.dataset.delg || e.target.dataset.edit) return;
     openAssignmentDetail(e.currentTarget.dataset.asg, cid, isTeacher);
+  }, tabc());
+  on("[data-edit]", "click", (e) => {
+    e.stopPropagation();
+    openAssignmentModal(cid, e.currentTarget.dataset.edit);
   }, tabc());
   on("[data-delg]", "click", async (e) => {
     e.stopPropagation();
@@ -1131,36 +1150,76 @@ async function tabAssignments(cid, isTeacher) {
   }, tabc());
 }
 
-function openAssignmentModal(cid) {
-  showModal("Giao bài tập", `
+/* Tải bảng điểm cả lớp: học sinh × các bài tập */
+async function exportClassGrades(cid, className) {
+  toast("Đang tạo bảng điểm...", "");
+  const [{ data: members }, { data: asgs }] = await Promise.all([
+    sb.from("class_members").select("student:student_id(id,full_name,email)").eq("class_id", cid),
+    sb.from("assignments").select("id,title,max_score").eq("class_id", cid).order("created_at"),
+  ]);
+  const asgList = asgs || [];
+  const asgIds = asgList.map((a) => a.id);
+  let subs = [];
+  if (asgIds.length) {
+    const { data } = await sb.from("submissions").select("assignment_id,student_id,score").in("assignment_id", asgIds);
+    subs = data || [];
+  }
+  const map = {};
+  subs.forEach((s) => { map[s.assignment_id + "|" + s.student_id] = s.score; });
+  const header = ["Học sinh", "Email", ...asgList.map((a) => `${a.title} (/${a.max_score})`)];
+  const rows = [header];
+  (members || []).forEach((m) => {
+    const st = m.student;
+    const row = [st.full_name, st.email];
+    asgList.forEach((a) => { const v = map[a.id + "|" + st.id]; row.push(v == null ? "" : v); });
+    rows.push(row);
+  });
+  if ((members || []).length === 0) return toast("Lớp chưa có học sinh", "err");
+  downloadCSV(`bang-diem-${(className || "lop").replace(/\s+/g, "_")}.csv`, rows);
+}
+
+async function openAssignmentModal(cid, existingId) {
+  let existing = null, existingQuiz = [];
+  if (existingId) {
+    const { data: a } = await sb.from("assignments").select("*").eq("id", existingId).single();
+    existing = a;
+    if (a && a.type === "quiz") {
+      const { data: qs } = await sb.from("quiz_questions").select("*").eq("assignment_id", existingId).order("position");
+      existingQuiz = (qs || []).map((q) => ({ question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: q.points }));
+    }
+  }
+  const ex = existing || {};
+  const isEdit = !!existing;
+  const typeOpt = (v, label) => `<option value="${v}" ${ex.type === v ? "selected" : ""}>${label}</option>`;
+  showModal(isEdit ? "Sửa bài tập" : "Giao bài tập", `
     <div class="field"><label>Loại bài</label>
       <select id="ag-type">
-        <option value="quiz">Trắc nghiệm (chấm tự động)</option>
-        <option value="arduino">Code Arduino (gợi ý chấm tự động)</option>
-        <option value="file">Nộp file</option>
-        <option value="text">Tự luận</option>
+        ${typeOpt("quiz", "Trắc nghiệm (chấm tự động)")}
+        ${typeOpt("arduino", "Code Arduino (gợi ý chấm tự động)")}
+        ${typeOpt("file", "Nộp file")}
+        ${typeOpt("text", "Tự luận")}
       </select></div>
-    <div class="field"><label>Tiêu đề *</label><input id="ag-title" /></div>
-    <div class="field"><label>Mô tả / đề bài</label><textarea id="ag-desc"></textarea></div>
+    <div class="field"><label>Tiêu đề *</label><input id="ag-title" value="${esc(ex.title || "")}" /></div>
+    <div class="field"><label>Mô tả / đề bài</label><textarea id="ag-desc">${esc(ex.description || "")}</textarea></div>
     <div class="row">
-      <div class="field"><label>Thời gian mở</label><input id="ag-open" type="datetime-local" /></div>
-      <div class="field"><label>Thời gian đóng</label><input id="ag-close" type="datetime-local" /></div>
+      <div class="field"><label>Thời gian mở</label><input id="ag-open" type="datetime-local" value="${toLocalInput(ex.open_time)}" /></div>
+      <div class="field"><label>Thời gian đóng</label><input id="ag-close" type="datetime-local" value="${toLocalInput(ex.close_time)}" /></div>
     </div>
-    <div class="field"><label>Điểm tối đa</label><input id="ag-max" type="number" value="10" /></div>
+    <div class="field"><label>Điểm tối đa</label><input id="ag-max" type="number" value="${ex.max_score ?? 10}" /></div>
     <div id="ag-arduino" class="hidden">
       <div class="field"><label>Từ khoá chấm (cách nhau dấu phẩy)</label>
-        <input id="ag-kw" placeholder="VD: void setup, void loop, pinMode, digitalWrite, delay" />
+        <input id="ag-kw" value="${esc(ex.grading_keywords || "")}" placeholder="VD: void setup, void loop, pinMode, digitalWrite, delay" />
         <div class="help">Hệ thống chấm tự động dựa trên cấu trúc & sự xuất hiện của các từ khoá này.</div></div>
-      <div class="field"><label>Code mẫu (tham khảo, không bắt buộc)</label><textarea id="ag-ref" class="code"></textarea></div>
+      <div class="field"><label>Code mẫu (tham khảo, không bắt buộc)</label><textarea id="ag-ref" class="code">${esc(ex.reference_code || "")}</textarea></div>
     </div>
     <div id="ag-quiz" class="hidden">
       <h3 style="font-size:14px;margin:6px 0">Câu hỏi trắc nghiệm</h3>
       <div id="quiz-list"></div>
       <button class="btn secondary sm" id="add-q" type="button">+ Thêm câu hỏi</button>
     </div>`,
-    `<button class="btn secondary" id="ag-cancel">Huỷ</button><button class="btn" id="ag-save">Giao bài</button>`, "lg");
+    `<button class="btn secondary" id="ag-cancel">Huỷ</button><button class="btn" id="ag-save">${isEdit ? "Lưu thay đổi" : "Giao bài"}</button>`, "lg");
   const typeSel = document.getElementById("ag-type");
-  let quiz = [];
+  let quiz = existingQuiz.slice();
   const renderQuiz = () => {
     document.getElementById("quiz-list").innerHTML = quiz.map((q, i) => `
       <div class="q-card">
@@ -1182,7 +1241,7 @@ function openAssignmentModal(cid) {
     document.getElementById("ag-arduino").classList.toggle("hidden", typeSel.value !== "arduino");
     document.getElementById("ag-quiz").classList.toggle("hidden", typeSel.value !== "quiz");
   };
-  typeSel.onchange = syncType; syncType();
+  typeSel.onchange = syncType; syncType(); renderQuiz();
   document.getElementById("ag-cancel").onclick = closeModal;
   document.getElementById("ag-save").onclick = async (e) => {
     const title = document.getElementById("ag-title").value.trim();
@@ -1193,22 +1252,32 @@ function openAssignmentModal(cid) {
     try {
       const openV = document.getElementById("ag-open").value;
       const closeV = document.getElementById("ag-close").value;
-      const { data: asg, error } = await sb.from("assignments").insert({
+      const payload = {
         class_id: cid, title, description: document.getElementById("ag-desc").value.trim(), type,
         open_time: openV ? new Date(openV).toISOString() : null,
         close_time: closeV ? new Date(closeV).toISOString() : null,
         reference_code: type === "arduino" ? document.getElementById("ag-ref").value : "",
         grading_keywords: type === "arduino" ? document.getElementById("ag-kw").value : "",
         max_score: Number(document.getElementById("ag-max").value) || 10,
-      }).select().single();
-      if (error) throw error;
+      };
+      let asgId = existingId;
+      if (isEdit) {
+        const { error } = await sb.from("assignments").update(payload).eq("id", existingId);
+        if (error) throw error;
+        // cập nhật câu hỏi: xoá hết rồi thêm lại theo danh sách hiện tại
+        await sb.from("quiz_questions").delete().eq("assignment_id", existingId);
+      } else {
+        const { data: asg, error } = await sb.from("assignments").insert(payload).select().single();
+        if (error) throw error;
+        asgId = asg.id;
+      }
       if (type === "quiz") {
-        const qrows = quiz.map((q, i) => ({ assignment_id: asg.id, position: i, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: Number(q.points) || 1 }));
+        const qrows = quiz.map((q, i) => ({ assignment_id: asgId, position: i, question: q.question, option_a: q.option_a, option_b: q.option_b, option_c: q.option_c, option_d: q.option_d, correct_option: q.correct_option, points: Number(q.points) || 1 }));
         const { error: qe } = await sb.from("quiz_questions").insert(qrows);
         if (qe) throw qe;
       }
-      toast("Đã giao bài", "ok"); closeModal(); tabAssignments(cid, true);
-    } catch (err) { toast("Lỗi: " + err.message, "err"); e.target.disabled = false; e.target.textContent = "Giao bài"; }
+      toast(isEdit ? "Đã lưu thay đổi" : "Đã giao bài", "ok"); closeModal(); tabAssignments(cid, true);
+    } catch (err) { toast("Lỗi: " + err.message, "err"); e.target.disabled = false; e.target.textContent = isEdit ? "Lưu thay đổi" : "Giao bài"; }
   };
 }
 
@@ -1357,11 +1426,20 @@ async function teacherAssignmentDetail(a) {
     </tr>`;
   }).join("");
   body.innerHTML = `
-    <div class="pill-row"><span class="badge blue">${TYPE_LABEL[a.type]}</span><span class="badge gray">Tối đa ${a.max_score}đ</span></div>
+    <div class="pill-row"><span class="badge blue">${TYPE_LABEL[a.type]}</span><span class="badge gray">Tối đa ${a.max_score}đ</span>
+      <button class="btn secondary sm" id="exp-one">⬇ Tải điểm (CSV)</button></div>
     <h3 style="margin:0 0 4px">${esc(a.title)}</h3>
     ${a.description ? `<p class="muted" style="white-space:pre-wrap">${esc(a.description)}</p>` : ""}
     <div class="table-wrap"><table><thead><tr><th>Học sinh</th><th>Bài nộp</th><th>Điểm</th><th></th></tr></thead>
     <tbody>${rows || `<tr><td colspan="4" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>`;
+  document.getElementById("exp-one").onclick = () => {
+    const r = [["Học sinh", "Trạng thái", "Thời gian nộp", `Điểm (/${a.max_score})`]];
+    (members || []).forEach((m) => {
+      const s = subMap[m.student.id];
+      r.push([m.student.full_name, s ? "Đã nộp" : "Chưa nộp", s ? fmtDT(s.submitted_at) : "", s && s.score != null ? s.score : ""]);
+    });
+    downloadCSV(`diem-${(a.title || "bai").replace(/\s+/g, "_")}.csv`, r);
+  };
   on("[data-save]", "click", async (e) => {
     const id = e.currentTarget.dataset.save;
     const val = body.querySelector(`[data-score="${id}"]`).value;
