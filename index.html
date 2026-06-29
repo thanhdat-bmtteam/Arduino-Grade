@@ -1433,13 +1433,19 @@ async function tabAbsenceReview(cid) {
     <div class="table-wrap"><table><thead><tr><th>Học sinh / ngày</th><th>Lý do</th><th>Trạng thái</th><th></th></tr></thead>
     <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có đơn.</td></tr>`}</tbody></table></div></div>`;
   on("[data-app]", "click", async (e) => {
-    const { id, sid, date } = e.currentTarget.dataset;
-    await sb.from("absence_requests").update({ status: "approved" }).eq("id", id);
-    await sb.from("attendance").upsert({ class_id: cid, student_id: sid, session_date: date, status: "excused", note: "Duyệt từ đơn xin phép" }, { onConflict: "class_id,student_id,session_date" });
-    toast("Đã duyệt & cập nhật điểm danh", "ok"); tabAbsenceReview(cid);
+    const id = e.currentTarget.dataset.app;
+    const sid = e.currentTarget.dataset.sid;
+    const date = e.currentTarget.dataset.date;
+    const { error } = await sb.from("absence_requests").update({ status: "approved" }).eq("id", id);
+    if (error) return toast("Lỗi duyệt đơn: " + error.message, "err");
+    const { error: ae } = await sb.from("attendance").upsert({ class_id: cid, student_id: sid, session_date: date, status: "excused", note: "Duyệt từ đơn xin phép" }, { onConflict: "class_id,student_id,session_date" });
+    if (ae) toast("Đã duyệt, nhưng cập nhật điểm danh lỗi: " + ae.message, "err");
+    else toast("Đã duyệt & cập nhật điểm danh", "ok");
+    tabAbsenceReview(cid);
   }, tabc());
   on("[data-rej]", "click", async (e) => {
-    await sb.from("absence_requests").update({ status: "rejected" }).eq("id", e.currentTarget.dataset.rej);
+    const { error } = await sb.from("absence_requests").update({ status: "rejected" }).eq("id", e.currentTarget.dataset.rej);
+    if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã từ chối", "ok"); tabAbsenceReview(cid);
   }, tabc());
 }
