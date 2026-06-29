@@ -695,7 +695,7 @@ async function adminUsers() {
       <td>${badgeRole(p.role)}</td>
       <td>
         ${p.id !== state.profile.id
-          ? `<button class="btn secondary sm" data-reset="${esc(p.email)}">Đặt lại MK</button>
+          ? `<button class="btn secondary sm" data-reset="${p.id}" data-email="${esc(p.email)}" data-name="${esc(p.full_name || p.email)}" data-role="${p.role}">Đặt lại MK</button>
              <button class="btn danger sm" data-del="${p.id}" data-name="${esc(p.full_name || p.email)}">Khoá</button>`
           : `<span class="badge gray">Bạn</span>`}
       </td>
@@ -709,12 +709,18 @@ async function adminUsers() {
     </table></div>`);
   document.getElementById("new-user").onclick = openCreateUser;
   on("[data-reset]", "click", async (e) => {
-    const email = e.currentTarget.dataset.reset;
-    if (!confirm(`Gửi email "đặt lại mật khẩu" tới ${email}?\n(Người dùng bấm link trong email để tự đặt mật khẩu mới. Cần có email thật & cấu hình gửi email trong Supabase.)`)) return;
-    const redirectTo = location.href.split("#")[0];
-    const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo });
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã gửi email đặt lại mật khẩu", "ok");
+    const d = e.currentTarget.dataset;
+    if (!confirm(`Đặt mật khẩu MỚI cho "${d.name}"?\nMật khẩu mới sẽ hiện ra để bạn copy gửi cho người dùng.`)) return;
+    const btn = e.currentTarget; btn.disabled = true; btn.textContent = "Đang đặt...";
+    const newPass = Math.random().toString(36).slice(2, 10);
+    try {
+      const { data, error } = await sb.functions.invoke("admin-reset-password", { body: { targetId: d.reset, newPassword: newPass } });
+      if (error) throw error;
+      if (!data || !data.ok) throw new Error(data && data.error ? data.error : "Không rõ lỗi");
+      showCredentials({ name: d.name, email: d.email, pass: newPass, role: d.role });
+    } catch (err) {
+      toast("Chưa đặt lại được mật khẩu. Cần cài Edge Function 'admin-reset-password' (xem hướng dẫn). Chi tiết: " + (err.message || err), "err");
+    } finally { btn.disabled = false; btn.textContent = "Đặt lại MK"; }
   });
   on("[data-del]", "click", async (e) => {
     const id = e.currentTarget.dataset.del, name = e.currentTarget.dataset.name;
