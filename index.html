@@ -189,6 +189,10 @@ window.EDUHUB_CONFIG = {
   SUPABASE_ANON_KEY: "sb_publishable_chHkEnJXb-x-40rfwylYAg_GpdE2J_1",
   SITE_NAME: "EduHub BMT TEAM",
 
+  // Đuôi email đăng nhập tự sinh cho học sinh khi Duyệt hồ sơ.
+  // VD "Trần Văn Tâm" -> vantam@student.bmt
+  STUDENT_EMAIL_DOMAIN: "student.bmt",
+
   // GỢI Ý TRƯỜNG theo Tỉnh (và theo Xã nếu muốn). Chỉ hiện gợi ý cho khu vực đã khai;
   // nơi chưa khai thì người đăng ký tự gõ (không hiện gợi ý sai).
   //  - Theo tỉnh:  "Tỉnh X": ["Trường A", "Trường B"]
@@ -245,6 +249,19 @@ function schoolsFor(province, ward) {
     if (all.length) return all;
   }
   return []; // chưa khai trường cho khu vực này -> không gợi ý (người dùng tự gõ)
+}
+// Bỏ dấu tiếng Việt
+function removeVN(s) {
+  return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d").replace(/Đ/g, "D");
+}
+// Tên đăng nhập học sinh: bỏ HỌ (từ đầu), ghép tên lót + tên, bỏ dấu, viết liền, thường.
+// "Trần Văn Tâm" -> "vantam"
+const STUDENT_DOMAIN = CFG.STUDENT_EMAIL_DOMAIN || "student.bmt";
+function studentLocalPart(fullName) {
+  const parts = removeVN(fullName).trim().split(/\s+/).filter(Boolean);
+  const use = parts.length > 1 ? parts.slice(1) : parts; // bỏ họ nếu có nhiều từ
+  return use.join("").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 let sb = null;
 let configOK =
@@ -740,7 +757,8 @@ function showCredentials(info, onDone) {
     <div class="card" style="margin:0;background:var(--surface-2)">
       <p style="margin:0 0 10px">Đã tạo <b>${esc(info.name || info.email)}</b> (${roleLbl}).
       <b>Hãy lưu lại / gửi ngay thông tin dưới đây</b> — mật khẩu sẽ <u>không xem lại được</u> về sau.</p>
-      <div class="field"><label>Email</label>
+      ${info.personal ? `<p class="help" style="margin:-4px 0 10px">Gửi tới email cá nhân của học sinh: <b>${esc(info.personal)}</b></p>` : ""}
+      <div class="field"><label>Email đăng nhập</label>
         <div class="copybar"><span style="flex:1" id="cr-email">${esc(info.email)}</span>
           <button class="btn ghost sm" data-copy="cr-email">Copy</button></div></div>
       <div class="field" style="margin-bottom:0"><label>Mật khẩu</label>
@@ -848,7 +866,7 @@ async function openManageClass(classId, className) {
 async function adminRegs() {
   setContent(loadingHTML());
   const { data } = await sb.from("course_registrations").select("*").order("created_at", { ascending: false });
-  const stt = { new: ["Mới", "amber"], contacted: ["Đã liên hệ", "blue"], enrolled: ["Đã ghi danh", "green"], rejected: ["Từ chối", "gray"] };
+  const stt = { new: ["Mới", "amber"], contacted: ["Đã liên hệ", "blue"], enrolled: ["Đã duyệt", "green"], rejected: ["Từ chối", "gray"] };
   const rows = (data || []).map((r) => `
     <tr>
       <td><b>${esc(r.full_name)}</b>
@@ -861,59 +879,59 @@ async function adminRegs() {
       <td class="meta">${esc(r.note || "")}</td>
       <td><span class="badge ${stt[r.status][1]}">${stt[r.status][0]}</span></td>
       <td style="white-space:nowrap">
-        <select data-reg="${r.id}" class="sm">
-          ${Object.entries(stt).map(([k, val]) => `<option value="${k}" ${r.status === k ? "selected" : ""}>${val[0]}</option>`).join("")}
-        </select>
-        ${r.status !== "enrolled" ? `<button class="btn success sm" data-approve="${r.id}" style="margin-top:6px">Duyệt & tạo TK</button>` : ""}
+        ${r.status !== "enrolled"
+          ? `<button class="btn success sm" data-approve="${r.id}">Duyệt & tạo TK</button>
+             <button class="btn ghost sm" data-delreg="${r.id}" data-name="${esc(r.full_name)}">Xoá</button>`
+          : `<button class="btn ghost sm" data-delreg="${r.id}" data-name="${esc(r.full_name)}">Xoá</button>`}
       </td>
     </tr>`).join("");
   setContent(`
     <div class="section-title"><h2>Đăng ký học</h2></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Cập nhật</th></tr></thead>
+      <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
     </table></div>`);
   const regMap = {}; (data || []).forEach((r) => { regMap[r.id] = r; });
   on("[data-approve]", "click", (e) => approveRegToAccount(regMap[e.currentTarget.dataset.approve]));
-  on("[data-reg]", "change", async (e) => {
-    const { error } = await sb.from("course_registrations").update({ status: e.target.value }).eq("id", e.target.dataset.reg);
+  on("[data-delreg]", "click", async (e) => {
+    if (!confirm(`Xoá hồ sơ đăng ký của "${e.currentTarget.dataset.name}"?`)) return;
+    const { error } = await sb.from("course_registrations").delete().eq("id", e.currentTarget.dataset.delreg);
     if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã cập nhật", "ok"); adminRegs();
+    toast("Đã xoá hồ sơ", "ok"); adminRegs();
   });
 }
 
-/* Duyệt hồ sơ -> tạo tài khoản học sinh + thêm vào lớp đã chọn + hiện mật khẩu để copy */
+/* Duyệt hồ sơ -> tạo tài khoản học sinh (email tự sinh @student) + thêm vào lớp + hiện mật khẩu */
 async function approveRegToAccount(reg) {
   if (!reg) return;
-  const email = (reg.email || "").trim();
-  if (!email) return toast("Hồ sơ này không có email — không tạo được tài khoản. Hãy tạo thủ công ở mục Tài khoản.", "err");
-  if (!confirm(`Tạo tài khoản học sinh cho "${reg.full_name}" (${email})` + (reg.class_id ? ` và thêm vào lớp "${esc(reg.course_name || "")}"` : "") + "?")) return;
+  const base = studentLocalPart(reg.full_name);
+  if (!base) return toast("Không tạo được email từ họ tên — kiểm tra lại tên.", "err");
+  const personal = (reg.email || "").trim();
+  if (!confirm(`Tạo tài khoản học sinh cho "${reg.full_name}"\nEmail đăng nhập: ${base}@${STUDENT_DOMAIN}` + (reg.class_id ? `\nThêm vào lớp: ${reg.course_name || ""}` : "") + "?")) return;
   const pass = Math.random().toString(36).slice(2, 10);
-  let userId = null, created = true;
-  try {
-    const u = await adminCreateUser(email, pass, reg.full_name, "student");
-    userId = u && u.id;
-  } catch (err) {
-    if (/registered|already|exists/i.test(err.message || "")) {
-      const { data: p } = await sb.from("profiles").select("id").eq("email", email).maybeSingle();
-      if (!p) return toast("Email đã tồn tại nhưng chưa có hồ sơ — hãy xử lý thủ công.", "err");
-      userId = p.id; created = false;
-    } else {
+  let userId = null, email = `${base}@${STUDENT_DOMAIN}`, attempt = 0;
+  // Tạo tài khoản; nếu trùng email (trùng tên) thì thêm số: vantam2, vantam3...
+  while (true) {
+    try {
+      const u = await adminCreateUser(email, pass, reg.full_name, "student");
+      userId = u && u.id; break;
+    } catch (err) {
+      if (/registered|already|exists/i.test(err.message || "")) {
+        attempt++;
+        if (attempt > 50) return toast("Quá nhiều tài khoản trùng tên — thử lại sau.", "err");
+        email = `${base}${attempt + 1}@${STUDENT_DOMAIN}`;
+        continue;
+      }
       return toast("Lỗi tạo tài khoản: " + err.message, "err");
     }
   }
-  // Thêm vào lớp đã chọn lúc đăng ký (nếu có); bỏ qua nếu đã ở trong lớp
+  // Thêm vào lớp đã chọn lúc đăng ký (nếu có)
   if (reg.class_id && userId) {
     const { error: me } = await sb.from("class_members").insert({ class_id: reg.class_id, student_id: userId });
     if (me && !/duplicate|unique/i.test(me.message || "")) toast("Lưu ý: không thêm được vào lớp (" + me.message + ")", "err");
   }
   await sb.from("course_registrations").update({ status: "enrolled" }).eq("id", reg.id);
-  if (created) {
-    showCredentials({ name: reg.full_name, email, pass, role: "student" }, adminRegs);
-  } else {
-    toast("Tài khoản đã tồn tại từ trước — đã ghi danh & thêm vào lớp. Dùng 'Đặt lại MK' nếu cần.", "ok");
-    adminRegs();
-  }
+  showCredentials({ name: reg.full_name, email, pass, role: "student", personal }, adminRegs);
 }
 
 /* ============================================================================
