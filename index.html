@@ -178,6 +178,13 @@ td .btn{margin-right:6px}
 .codeline.bad .lt{color:#fecaca}
 .codeline.bad .ln{background:rgba(220,38,38,.4);color:#fff;cursor:help}
 
+/* ---- bảng điểm: màu theo xếp loại + ô nhập điểm ---- */
+tr.g-gold td{background:#fef9c3 !important}
+tr.g-silver td{background:#eef1f5 !important}
+tr.g-red td{background:#fee2e2 !important}
+.grade-in{width:62px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font:inherit;text-align:center;background:#fff}
+.grade-in:focus{outline:2px solid var(--blue);border-color:var(--blue)}
+
   </style>
 </head>
 <body>
@@ -261,6 +268,40 @@ function computeFinal(attStatuses, processNorms, finalNorms) {
 }
 // Quy điểm 1 bài về thang 10
 const norm10 = (score, max) => (max > 0 ? (Number(score) / Number(max)) * 10 : 0);
+// Xáo trộn mảng (Fisher–Yates)
+function shuffle(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
+// Màu nền hàng theo điểm tổng kết
+function gradeRowBg(total) {
+  if (total == null) return "";
+  if (total >= 8) return "background:#fef9c3"; // vàng nhạt (giỏi)
+  if (total >= 5) return "background:#eef1f6"; // bạc nhạt (đạt)
+  return "background:#fde2e2"; // đỏ nhạt (cần cố gắng)
+}
+// Tính lại Tổng kết của 1 hàng trong bảng điểm GV (sau khi sửa ô điểm) — không tải lại trang
+function recalcGradeRow(tr) {
+  const proc = [], fin = [];
+  tr.querySelectorAll("input.gcell").forEach((inp) => {
+    if (inp.value !== "" && !Number.isNaN(Number(inp.value))) {
+      const n = norm10(Number(inp.value), Number(inp.dataset.max));
+      (inp.dataset.cat === "final" ? fin : proc).push(n);
+    }
+  });
+  const attAvg = tr.dataset.attavg === "" ? null : Number(tr.dataset.attavg);
+  const comps = [];
+  if (attAvg != null) comps.push([WEIGHTS.attendance, attAvg]);
+  if (proc.length) comps.push([WEIGHTS.process, _avg(proc)]);
+  if (fin.length) comps.push([WEIGHTS.final, _avg(fin)]);
+  const wsum = comps.reduce((a, [w]) => a + w, 0);
+  const total = wsum ? comps.reduce((a, [w, v]) => a + w * v, 0) / wsum : null;
+  const partial = wsum > 0 && wsum < 0.999;
+  const cell = tr.querySelector(".tot");
+  if (cell) cell.innerHTML = (total == null ? "—" : `<b>${r2(total)}</b>`) + (partial ? `<span class="meta"> *</span>` : "");
+  tr.setAttribute("style", gradeRowBg(total));
+}
 // Danh sách trường gợi ý cho form đăng ký (có thể sửa trong config: SCHOOLS: [...])
 const DEFAULT_SCHOOLS = [
   "THPT Buôn Ma Thuột", "THPT Chu Văn An", "THPT Lê Quý Đôn", "THPT Hồng Đức",
@@ -1205,7 +1246,7 @@ function asgStatus(a) {
   if (a.close_time && now > new Date(a.close_time)) return ["Đã đóng", "red"];
   return ["Đang mở", "green"];
 }
-const TYPE_LABEL = { arduino: "Code Arduino", quiz: "Trắc nghiệm", file: "Nộp file", text: "Tự luận" };
+const TYPE_LABEL = { arduino: "Code Arduino", quiz: "Trắc nghiệm", file: "Nộp file", text: "Tự luận", offline: "Kiểm tra trên lớp", random: "Bốc đề thực hành" };
 async function tabAssignments(cid, isTeacher) {
   const { data } = await sb.from("assignments").select("*").eq("class_id", cid).order("created_at", { ascending: false });
   const items = (data || []).map((a) => {
@@ -1305,34 +1346,62 @@ async function tabClassGrades(cid) {
   subs.forEach((s) => { map[s.assignment_id + "|" + s.student_id] = s; });
   const attBy = {};
   (att || []).forEach((a) => { (attBy[a.student_id] = attBy[a.student_id] || []).push(a.status); });
-  const head = `<tr><th>Học sinh</th>${asgList.map((a) => {
-    const short = a.title.length > 16 ? a.title.slice(0, 16) + "…" : a.title;
+  const head = `<tr><th>Học sinh</th><th>Điểm danh<div class="meta">/10</div></th>${asgList.map((a) => {
+    const short = a.title.length > 14 ? a.title.slice(0, 14) + "…" : a.title;
     const tag = a.category === "final" ? " ★" : "";
     return `<th title="${esc(a.title)}${a.category === "final" ? " (Cuối khoá)" : ""}">${esc(short)}${tag}<div class="meta">/${a.max_score}</div></th>`;
   }).join("")}<th>Tổng kết</th></tr>`;
   const rows = (members || []).map((m) => {
     const st = m.student; const procNorms = [], finNorms = [];
+    const attStatuses = attBy[st.id] || [];
+    const attAvg = attStatuses.length ? _avg(attStatuses.map((s) => (ATT_PTS[s] != null ? ATT_PTS[s] : 0))) : null;
     const cells = asgList.map((a) => {
       const s = map[a.id + "|" + st.id];
-      if (!s) return `<td class="muted">—</td>`;
-      if (s.score == null) return `<td><span class="badge amber">chờ</span></td>`;
-      const n = norm10(s.score, a.max_score);
-      if (a.category === "final") finNorms.push(n); else procNorms.push(n);
-      return `<td><b>${s.score}</b>${s.graded ? "" : `<span class="meta"> (gợi ý)</span>`}</td>`;
+      if (s && s.score != null) {
+        const n = norm10(s.score, a.max_score);
+        if (a.category === "final") finNorms.push(n); else procNorms.push(n);
+      }
+      const note = s && s.score != null && !s.graded ? `<div class="meta">gợi ý</div>` : "";
+      return `<td><input class="gcell" type="number" step="0.1" min="0" style="width:62px"
+        data-aid="${a.id}" data-sid="${st.id}" data-max="${a.max_score}" data-cat="${a.category || "process"}" data-subid="${s ? s.id : ""}"
+        value="${s && s.score != null ? s.score : ""}" />${note}</td>`;
     }).join("");
-    const f = computeFinal(attBy[st.id] || [], procNorms, finNorms);
-    const tot = f.total == null ? "—" : r2(f.total);
-    const title = `Điểm danh ${f.attN} buổi: ${f.attAvg == null ? "—" : r2(f.attAvg)} ×10% | Quá trình ${f.procN} bài: ${f.procAvg == null ? "—" : r2(f.procAvg)} ×60% | Cuối khoá ${f.finN} bài: ${f.finAvg == null ? "—" : r2(f.finAvg)} ×30%${f.partial ? " (tạm tính)" : ""}`;
-    return `<tr><td>${esc(st.full_name)}</td>${cells}<td title="${esc(title)}" style="background:rgba(37,99,235,.08)"><b>${tot}</b>${f.partial ? `<span class="meta"> *</span>` : ""}</td></tr>`;
+    const f = computeFinal(attStatuses, procNorms, finNorms);
+    const tot = f.total == null ? "—" : `<b>${r2(f.total)}</b>`;
+    const attCell = attAvg == null ? `<td class="muted">—</td>` : `<td><b>${r2(attAvg)}</b><div class="meta">${attStatuses.length} buổi</div></td>`;
+    const title = `Điểm danh ${f.attN} buổi: ${f.attAvg == null ? "—" : r2(f.attAvg)} ×10% | Quá trình ${f.procN} bài: ${f.procAvg == null ? "—" : r2(f.procAvg)} ×60% | Cuối khoá ${f.finN} bài: ${f.finAvg == null ? "—" : r2(f.finAvg)} ×30%`;
+    return `<tr data-attavg="${attAvg == null ? "" : attAvg}" style="${gradeRowBg(f.total)}">
+      <td>${esc(st.full_name)}</td>${attCell}${cells}
+      <td class="tot" title="${esc(title)}">${tot}${f.partial ? `<span class="meta"> *</span>` : ""}</td></tr>`;
   }).join("");
   tabc().innerHTML = asgList.length
     ? `<div class="pill-row"><button class="btn secondary sm" id="exp-grades2">⬇ Tải bảng điểm (CSV)</button></div>
        <div class="table-wrap"><table><thead>${head}</thead>
-       <tbody>${rows || `<tr><td colspan="${asgList.length + 2}" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>
-       <p class="meta" style="margin-top:8px">Cột <b>Tổng kết</b> = 10% điểm danh + 60% quá trình + 30% cuối khoá (rê chuột để xem chi tiết). Bài có dấu ★ = Kiểm tra cuối khoá. "*" = chưa đủ 3 phần nên tạm tính. "(gợi ý)" = điểm máy chấm Arduino chưa chốt; "chờ" = chưa chấm.</p>`
+       <tbody>${rows || `<tr><td colspan="${asgList.length + 3}" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>
+       <p class="meta" style="margin-top:8px">Gõ trực tiếp vào ô điểm để nhập/sửa (kể cả bài kiểm tra trên lớp học sinh không nộp). Màu hàng: <b style="background:#fef9c3;padding:0 4px;border-radius:3px">≥8 giỏi</b> · <b style="background:#eef1f6;padding:0 4px;border-radius:3px">5–8 đạt</b> · <b style="background:#fde2e2;padding:0 4px;border-radius:3px">&lt;5 cần cố gắng</b>. ★ = cuối khoá · "*" = chưa đủ 3 phần (tạm tính) · "gợi ý" = điểm máy Arduino chưa chốt.</p>`
     : `<div class="empty"><div class="em">📊</div><p>Chưa có bài tập nào để tính điểm.</p></div>`;
   const b = document.getElementById("exp-grades2");
   if (b) b.onclick = () => exportClassGrades(cid, state.params.name);
+  on("input.gcell", "change", async (e) => {
+    const inp = e.currentTarget;
+    const val = inp.value.trim();
+    const subid = inp.dataset.subid;
+    try {
+      if (val === "") {
+        if (subid) { const { error } = await sb.from("submissions").update({ score: null }).eq("id", subid); if (error) throw error; }
+      } else {
+        const score = Number(val);
+        if (Number.isNaN(score)) return;
+        if (subid) {
+          const { error } = await sb.from("submissions").update({ score, graded: true }).eq("id", subid); if (error) throw error;
+        } else {
+          const { data, error } = await sb.from("submissions").insert({ assignment_id: inp.dataset.aid, student_id: inp.dataset.sid, score, graded: true, submitted_at: new Date().toISOString() }).select("id").single();
+          if (error) throw error; inp.dataset.subid = data.id;
+        }
+      }
+      recalcGradeRow(inp.closest("tr"));
+    } catch (err) { toast("Lỗi lưu điểm: " + err.message, "err"); }
+  }, tabc());
 }
 
 /* Bảng điểm của học sinh: theo từng lớp, liệt kê điểm từng bài */
@@ -1411,6 +1480,8 @@ async function openAssignmentModal(cid, existingId) {
         ${typeOpt("arduino", "Code Arduino (gợi ý chấm tự động)")}
         ${typeOpt("file", "Nộp file")}
         ${typeOpt("text", "Tự luận")}
+        ${typeOpt("offline", "Kiểm tra trên lớp (giáo viên nhập điểm)")}
+        ${typeOpt("random", "Bốc đề thực hành (random nhóm)")}
       </select></div>
     <div class="field"><label>Tiêu đề *</label><input id="ag-title" value="${esc(ex.title || "")}" /></div>
     <div class="field"><label>Mô tả / đề bài</label><textarea id="ag-desc">${esc(ex.description || "")}</textarea></div>
@@ -1431,9 +1502,22 @@ async function openAssignmentModal(cid, existingId) {
       <div class="field"><label>Code mẫu (tham khảo, không bắt buộc)</label><textarea id="ag-ref" class="code">${esc(ex.reference_code || "")}</textarea></div>
     </div>
     <div id="ag-quiz" class="hidden">
-      <h3 style="font-size:14px;margin:6px 0">Câu hỏi trắc nghiệm</h3>
+      <div class="row">
+        <div class="field"><label>Số câu rút ra khi thi (0 = lấy hết)</label><input id="ag-draw" type="number" min="0" value="${ex.draw_count ?? 0}" /></div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="ag-shuf-o" ${ex.shuffle_options ? "checked" : ""}/> Đảo thứ tự đáp án</label></div>
+      <div class="field"><label><input type="checkbox" id="ag-shuf-q" ${ex.shuffle_questions ? "checked" : ""}/> Đảo thứ tự câu hỏi</label></div>
+      <h3 style="font-size:14px;margin:6px 0">Ngân hàng câu hỏi</h3>
       <div id="quiz-list"></div>
       <button class="btn secondary sm" id="add-q" type="button">+ Thêm câu hỏi</button>
+    </div>
+    <div id="ag-random" class="hidden">
+      <div class="row">
+        <div class="field"><label>Số nhóm (đề chính)</label><input id="ag-gc" type="number" min="1" value="${ex.group_count ?? 10}" /></div>
+        <div class="field"><label>Số phương án mỗi đề</label><input id="ag-vc" type="number" min="1" value="${ex.variant_count ?? 3}" /></div>
+      </div>
+      <div class="help" style="margin-bottom:8px">Tải ảnh đề cho từng ô <b>Nhóm.Phương án</b> (vd 1.1, 1.2…). Học sinh bốc trúng ô nào sẽ thấy ảnh đó. Bỏ trống ô nào thì học sinh chỉ thấy nhãn.</div>
+      <div id="de-grid"></div>
     </div>`,
     `<button class="btn secondary" id="ag-cancel">Huỷ</button><button class="btn" id="ag-save">${isEdit ? "Lưu thay đổi" : "Giao bài"}</button>`, "lg");
   const typeSel = document.getElementById("ag-type");
@@ -1474,9 +1558,37 @@ async function openAssignmentModal(cid, existingId) {
     });
   };
   document.getElementById("add-q").onclick = () => { quiz.push({ question: "", option_a: "", option_b: "", option_c: "", option_d: "", correct_option: "A", points: 1, question_image: "", option_a_image: "", option_b_image: "", option_c_image: "", option_d_image: "" }); renderQuiz(); };
+  let deImages = Object.assign({}, ex.de_images || {});
+  const renderDeGrid = () => {
+    const gc = Math.max(1, Number(document.getElementById("ag-gc").value) || 10);
+    const vc = Math.max(1, Number(document.getElementById("ag-vc").value) || 3);
+    let html = "";
+    for (let g = 1; g <= gc; g++) {
+      html += `<div style="margin-bottom:6px"><b>Nhóm ${g}</b><div class="row">`;
+      for (let v = 1; v <= vc; v++) {
+        const label = g + "." + v, url = deImages[label];
+        html += `<div class="field" style="min-width:120px"><label>Đề ${label}</label>
+          <input type="file" accept="image/*" data-de="${label}" style="font-size:12px"/>
+          ${url ? `<div style="margin-top:4px"><img src="${esc(url)}" style="max-height:70px;border-radius:6px;border:1px solid var(--line)"/>
+            <button class="btn ghost sm" type="button" data-derm="${label}">Xoá</button></div>` : ""}</div>`;
+      }
+      html += `</div></div>`;
+    }
+    document.getElementById("de-grid").innerHTML = html;
+    document.querySelectorAll("[data-de]").forEach((inp) => inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      toast("Đang tải ảnh...", "");
+      try { deImages[inp.dataset.de] = await uploadFile(f, "de"); renderDeGrid(); }
+      catch (err) { toast("Lỗi tải ảnh: " + err.message, "err"); }
+    });
+    document.querySelectorAll("[data-derm]").forEach((b) => b.onclick = () => { delete deImages[b.dataset.derm]; renderDeGrid(); });
+  };
+  ["ag-gc", "ag-vc"].forEach((id) => { const el = document.getElementById(id); if (el) el.onchange = renderDeGrid; });
   const syncType = () => {
     document.getElementById("ag-arduino").classList.toggle("hidden", typeSel.value !== "arduino");
     document.getElementById("ag-quiz").classList.toggle("hidden", typeSel.value !== "quiz");
+    document.getElementById("ag-random").classList.toggle("hidden", typeSel.value !== "random");
+    if (typeSel.value === "random") renderDeGrid();
   };
   typeSel.onchange = syncType; syncType(); renderQuiz();
   document.getElementById("ag-cancel").onclick = closeModal;
@@ -1497,6 +1609,12 @@ async function openAssignmentModal(cid, existingId) {
         grading_keywords: type === "arduino" ? document.getElementById("ag-kw").value : "",
         max_score: Number(document.getElementById("ag-max").value) || 10,
         category: document.getElementById("ag-cat").value === "final" ? "final" : "process",
+        group_count: Number(document.getElementById("ag-gc").value) || 10,
+        variant_count: Number(document.getElementById("ag-vc").value) || 3,
+        de_images: type === "random" ? deImages : {},
+        draw_count: type === "quiz" ? (Number(document.getElementById("ag-draw").value) || 0) : 0,
+        shuffle_options: type === "quiz" ? document.getElementById("ag-shuf-o").checked : false,
+        shuffle_questions: type === "quiz" ? document.getElementById("ag-shuf-q").checked : false,
       };
       let asgId = existingId;
       if (isEdit) {
@@ -1527,6 +1645,24 @@ async function openAssignmentDetail(asgId, cid, isTeacher) {
   return studentAssignmentDetail(a);
 }
 
+/* Hiển thị đề học sinh đã bốc + ảnh + danh sách bạn cùng nhóm */
+async function renderRandomClaim(a, ans, inner, body) {
+  const label = ans.label || (ans.group + "." + ans.variant);
+  const img = (a.de_images || {})[label];
+  body.innerHTML = inner + `<div class="card" style="margin:0">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <b>Đề của bạn</b><span style="font-size:28px;font-weight:800;color:var(--blue)">${esc(label)}</span></div>
+    <p class="meta">Nhóm ${ans.group} · Phương án ${ans.variant} — ngồi cùng các bạn <b>Nhóm ${ans.group}</b> (dùng chung kit).</p>
+    ${img ? `<img src="${esc(img)}" style="max-width:100%;border-radius:10px;margin-top:8px"/>`
+          : `<p class="muted">Giáo viên chưa đính kèm ảnh cho ô này — xem đề theo nhãn <b>${esc(label)}</b> trên kit/giấy.</p>`}
+    <div id="roster" class="meta" style="margin-top:12px"><span class="loader"></span></div></div>`;
+  const { data: roster } = await sb.rpc("random_de_roster", { p_assignment: a.id });
+  const mates = (roster || []).filter((r) => r.grp === ans.group);
+  const el = document.getElementById("roster");
+  if (el) el.innerHTML = `<b>Thành viên Nhóm ${ans.group}:</b> ` +
+    (mates.length ? mates.map((r) => `${esc(r.full_name)} (${esc(r.label)})`).join(" · ") : "—");
+}
+
 /* ----- Học sinh: làm bài ----- */
 async function studentAssignmentDetail(a) {
   const [stx] = asgStatus(a);
@@ -1539,6 +1675,39 @@ async function studentAssignmentDetail(a) {
 
   if (stx === "Chưa mở") { body.innerHTML = inner + `<div class="empty">Bài tập chưa mở.</div>`; return; }
   const closed = stx === "Đã đóng";
+
+  // Bài kiểm tra trên lớp: học sinh không nộp, chỉ xem điểm giáo viên nhập
+  if (a.type === "offline") {
+    const has = mySub && mySub.score != null;
+    inner += `<div class="card" style="margin:0">
+      <b>Bài kiểm tra trên lớp</b>
+      <p class="muted" style="margin:4px 0 0">Điểm do giáo viên nhập trực tiếp, không cần nộp bài ở đây.</p>
+      ${has ? `<p style="margin-top:8px">Điểm: <b>${mySub.score}/${a.max_score}</b></p>` : `<p class="muted" style="margin-top:8px">Chưa có điểm.</p>`}
+      ${mySub && mySub.teacher_feedback ? `<div style="margin-top:8px"><b>Nhận xét của giáo viên:</b><p style="white-space:pre-wrap;margin:4px 0 0">${esc(mySub.teacher_feedback)}</p></div>` : ""}
+    </div>`;
+    body.innerHTML = inner; return;
+  }
+
+  // Bốc đề thực hành: học sinh bốc 1 suất ngẫu nhiên, xem ảnh đề + nhóm
+  if (a.type === "random") {
+    const ans = mySub && mySub.answers && mySub.answers.group ? mySub.answers : null;
+    if (ans) { await renderRandomClaim(a, ans, inner, body); return; }
+    if (closed) { body.innerHTML = inner + `<div class="empty">Đã đóng — bạn chưa bốc đề.</div>`; return; }
+    inner += `<div class="card" style="margin:0"><b>Bốc đề thực hành</b>
+      <p class="muted" style="margin:4px 0 10px">Bấm để bốc ngẫu nhiên một đề. Bốc rồi sẽ giữ nguyên (không đổi lại). Các bạn cùng nhóm sẽ ngồi chung kit.</p>
+      <button class="btn block" id="claim-de">🎲 Lấy đề</button></div>`;
+    body.innerHTML = inner;
+    document.getElementById("claim-de").onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = "Đang bốc...";
+      const { data, error } = await sb.rpc("claim_random_de", { p_assignment: a.id });
+      if (error || !data || !data.ok) {
+        toast((data && data.error) || (error && error.message) || "Không bốc được đề", "err");
+        e.target.disabled = false; e.target.textContent = "🎲 Lấy đề"; return;
+      }
+      openAssignmentDetail(a.id, a.class_id, false);
+    };
+    return;
+  }
 
   // ĐÃ NỘP -> chỉ xem, không cho nộp lại (đến khi giáo viên xoá bài cho làm lại)
   if (mySub) {
@@ -1567,22 +1736,32 @@ async function studentAssignmentDetail(a) {
   if (closed) { body.innerHTML = inner + `<div class="empty">Đã đóng — bạn chưa nộp bài.</div>`; return; }
 
   if (a.type === "quiz") {
-    const { data: qs } = await sb.from("quiz_questions").select("*").eq("assignment_id", a.id).order("position");
+    const { data: qsRaw } = await sb.from("quiz_questions").select("*").eq("assignment_id", a.id).order("position");
+    let qsAll = qsRaw || [];
+    if (a.shuffle_questions) qsAll = shuffle(qsAll);
+    let qs = (a.draw_count && a.draw_count > 0) ? qsAll.slice(0, a.draw_count) : qsAll;
+    qs = qs.map((q) => {
+      let opts = ["a", "b", "c", "d"].filter((o) => q["option_" + o] || q["option_" + o + "_image"]);
+      if (a.shuffle_options) opts = shuffle(opts);
+      return Object.assign({}, q, { _opts: opts });
+    });
     inner += qs.map((q, i) => `<div class="q-card"><b>Câu ${i + 1}.</b> ${esc(q.question)}
       ${q.question_image ? `<div><img src="${esc(q.question_image)}" style="max-width:100%;max-height:280px;border-radius:8px;margin:8px 0"/></div>` : ""}
-      ${["a", "b", "c", "d"].filter((o) => q["option_" + o] || q["option_" + o + "_image"]).map((o) => `
-        <label class="opt"><input type="radio" name="q-${q.id}" value="${o.toUpperCase()}"/> <b>${o.toUpperCase()}.</b> ${esc(q["option_" + o] || "")}
+      ${q._opts.map((o, idx) => `
+        <label class="opt"><input type="radio" name="q-${q.id}" value="${o.toUpperCase()}"/> <b>${String.fromCharCode(65 + idx)}.</b> ${esc(q["option_" + o] || "")}
         ${q["option_" + o + "_image"] ? `<img src="${esc(q["option_" + o + "_image"])}" style="max-height:110px;border-radius:6px;margin-left:6px;vertical-align:middle"/>` : ""}</label>`).join("")}</div>`).join("");
     inner += `<button class="btn block" id="quiz-submit">Nộp bài</button>`;
     body.innerHTML = inner;
     document.getElementById("quiz-submit").onclick = async (e) => {
       const answers = {};
       qs.forEach((q) => { const sel = body.querySelector(`input[name="q-${q.id}"]:checked`); answers[q.id] = sel ? sel.value : ""; });
-      let score = 0; qs.forEach((q) => { if (answers[q.id] === q.correct_option) score += Number(q.points); });
+      let totalPts = 0, correctPts = 0, correctN = 0;
+      qs.forEach((q) => { totalPts += Number(q.points) || 0; if (answers[q.id] === q.correct_option) { correctPts += Number(q.points) || 0; correctN++; } });
+      const score = totalPts > 0 ? Math.round(correctPts / totalPts * a.max_score * 100) / 100 : 0;
       e.target.disabled = true;
       const { error } = await sb.from("submissions").upsert({
         assignment_id: a.id, student_id: state.profile.id, answers, score, graded: true,
-        auto_feedback: `Chấm tự động: đúng ${qs.filter((q) => answers[q.id] === q.correct_option).length}/${qs.length} câu.`,
+        auto_feedback: `Chấm tự động: đúng ${correctN}/${qs.length} câu.`,
         submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
       if (error) { e.target.disabled = false; return toast("Lỗi: " + error.message, "err"); }
@@ -1743,6 +1922,31 @@ function gradeArduino(code, keywordsStr, maxScore) {
 /* ----- Giáo viên: xem & chấm bài nộp ----- */
 async function teacherAssignmentDetail(a) {
   const body = modalRoot().querySelector(".modal-body");
+  // Bài bốc đề: hiển thị danh sách nhóm + nút xáo lại
+  if (a.type === "random") {
+    body.innerHTML = `<div class="pill-row"><span class="badge blue">Bốc đề thực hành</span>
+      <span class="badge gray">${a.group_count || 10} nhóm × ${a.variant_count || 3} phương án</span></div>
+      <h3 style="margin:0 0 4px">${esc(a.title)}</h3>
+      ${a.description ? `<p class="muted" style="white-space:pre-wrap">${esc(a.description)}</p>` : ""}
+      <div id="rost">${loadingHTML()}</div>
+      <button class="btn danger sm" id="reset-draw" style="margin-top:10px">Xoá toàn bộ lượt bốc (xáo lại)</button>`;
+    const { data: roster } = await sb.rpc("random_de_roster", { p_assignment: a.id });
+    const byGroup = {};
+    (roster || []).forEach((r) => { (byGroup[r.grp] = byGroup[r.grp] || []).push(r); });
+    const groups = Object.keys(byGroup).map(Number).sort((x, y) => x - y);
+    document.getElementById("rost").innerHTML = groups.length
+      ? `<p class="meta">${(roster || []).length} học sinh đã bốc đề.</p>` + groups.map((g) =>
+        `<div class="card" style="margin:8px 0;padding:10px"><b>Nhóm ${g}</b> <span class="meta">(ngồi chung kit)</span><br>
+          ${byGroup[g].map((r) => `${esc(r.full_name)} — <b>Đề ${esc(r.label)}</b>`).join("<br>")}</div>`).join("")
+      : `<div class="empty">Chưa có học sinh nào bốc đề.</div>`;
+    document.getElementById("reset-draw").onclick = async () => {
+      if (!confirm("Xoá toàn bộ lượt bốc đề của bài này? Mọi học sinh sẽ bốc lại từ đầu (dùng để xáo nhóm buổi mới).")) return;
+      const { error } = await sb.from("submissions").delete().eq("assignment_id", a.id);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã xoá — học sinh có thể bốc lại", "ok"); teacherAssignmentDetail(a);
+    };
+    return;
+  }
   const [{ data: members }, { data: subs }] = await Promise.all([
     sb.from("class_members").select("student:student_id(id,full_name)").eq("class_id", a.class_id),
     sb.from("submissions").select("*, student:student_id(full_name)").eq("assignment_id", a.id),
