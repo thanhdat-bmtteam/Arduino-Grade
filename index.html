@@ -1483,6 +1483,7 @@ function lintArduino(raw) {
   if (!code.trim()) { errors.push({ line: 1, msg: "Code trống" }); return { errors }; }
   const lines = code.split(/\r?\n/);
   let inBlock = false, braceBal = 0, parenBal = 0, negBrace = 0, negParen = 0;
+  const clean = [];
   lines.forEach((s, idx) => {
     const lineNo = idx + 1;
     let cleaned = "";
@@ -1506,6 +1507,7 @@ function lintArduino(raw) {
       else if (c === "(") parenBal++;
       else if (c === ")") { parenBal--; if (parenBal < 0 && !negParen) negParen = lineNo; }
     }
+    clean.push(noStr.trim());
   });
   if (inBlock) errors.push({ line: lines.length, msg: "Comment /* */ chưa đóng" });
   if (negBrace) errors.push({ line: negBrace, msg: "Thừa dấu } (đóng ngoặc nhọn dư)" });
@@ -1515,6 +1517,28 @@ function lintArduino(raw) {
   const lc = code.toLowerCase();
   if (!/void\s+setup\s*\(/.test(lc)) errors.push({ line: 1, msg: "Thiếu hàm void setup()" });
   if (!/void\s+loop\s*\(/.test(lc)) errors.push({ line: 1, msg: "Thiếu hàm void loop()" });
+  // Kiểm tra THIẾU DẤU ; (thận trọng để tránh báo nhầm)
+  const skipEnd = /[;{},(\[:\\+\-*/%=<>&|^!?.~]$/; // dòng kết thúc kiểu này thì bỏ qua
+  const ctrlHead = /^(if|for|while|switch|else|do)\b/; // header điều khiển: không cần ;
+  let semiCount = 0;
+  for (let i = 0; i < clean.length && semiCount < 8; i++) {
+    const t = clean[i];
+    if (!t || t[0] === "#") continue;
+    if (skipEnd.test(t)) continue;
+    if (ctrlHead.test(t)) continue;
+    let nxt = "";
+    for (let j = i + 1; j < clean.length; j++) { if (clean[j]) { nxt = clean[j]; break; } }
+    const isAssign = t.includes("=") && !/==|<=|>=|!=/.test(t);
+    const isReturnLike = /^(return|break|continue)\b/.test(t);
+    if (t.endsWith(")")) {
+      if (nxt.startsWith("{") || nxt.startsWith(".")) continue; // định nghĩa hàm / control { dòng sau / nối chuỗi
+      errors.push({ line: i + 1, msg: "Thiếu dấu ; cuối câu lệnh" }); semiCount++;
+    } else if (isAssign || isReturnLike) {
+      errors.push({ line: i + 1, msg: "Thiếu dấu ; cuối câu lệnh" }); semiCount++;
+    }
+  }
+  // sắp xếp lỗi theo số dòng cho dễ đọc
+  errors.sort((x, y) => x.line - y.line);
   return { errors };
 }
 /* HTML hiển thị code, dòng lỗi tô đỏ + di chuột xem lỗi (title) */
