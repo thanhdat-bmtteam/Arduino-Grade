@@ -463,7 +463,7 @@ function render() {
   const map = {
     "admin-dash": adminDash, "admin-users": adminUsers, "admin-classes": adminClasses, "admin-regs": adminRegs,
     "teacher-classes": teacherClasses, "class": classView,
-    "student-classes": studentClasses, "student-absence": studentAbsence,
+    "student-classes": studentClasses, "student-absence": studentAbsence, "student-grades": studentGrades,
   };
   const fn = map[v];
   if (!fn) return routeDefault();
@@ -626,7 +626,7 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký học", "📝"],
   ];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
-  return [["student-classes", "Lớp của tôi", "🏫"], ["student-absence", "Xin phép vắng", "📅"]];
+  return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
 }
 function renderShell() {
   const items = navItems();
@@ -1034,7 +1034,7 @@ async function studentAbsence() {
 function classView() {
   const isTeacher = state.profile.role === "teacher" || state.profile.role === "admin";
   const tabs = isTeacher
-    ? [["ann", "Thông báo"], ["mat", "Tài liệu"], ["asg", "Bài tập"], ["att", "Điểm danh"], ["abs", "Đơn xin phép"], ["stu", "Học sinh"]]
+    ? [["ann", "Thông báo"], ["mat", "Tài liệu"], ["asg", "Bài tập"], ["grade", "Bảng điểm"], ["att", "Điểm danh"], ["abs", "Đơn xin phép"], ["stu", "Học sinh"]]
     : [["ann", "Thông báo"], ["mat", "Tài liệu"], ["asg", "Bài tập"], ["myatt", "Điểm danh của tôi"]];
   const tab = state.params.tab || "ann";
   setContent(`
@@ -1051,6 +1051,7 @@ function classView() {
     ann: () => tabAnnouncements(cid, isTeacher),
     mat: () => tabMaterials(cid, isTeacher),
     asg: () => tabAssignments(cid, isTeacher),
+    grade: () => tabClassGrades(cid),
     att: () => tabAttendance(cid),
     abs: () => tabAbsenceReview(cid),
     stu: () => tabStudents(cid),
@@ -1248,6 +1249,82 @@ async function exportClassGrades(cid, className) {
   downloadCSV(`bang-diem-${(className || "lop").replace(/\s+/g, "_")}.csv`, rows);
 }
 
+/* Bảng điểm cả lớp (giáo viên): học sinh × các bài tập + cột trung bình */
+async function tabClassGrades(cid) {
+  tabc().innerHTML = loadingHTML();
+  const [{ data: members }, { data: asgs }] = await Promise.all([
+    sb.from("class_members").select("student:student_id(id,full_name)").eq("class_id", cid),
+    sb.from("assignments").select("id,title,max_score").eq("class_id", cid).order("created_at"),
+  ]);
+  const asgList = asgs || [];
+  const asgIds = asgList.map((a) => a.id);
+  let subs = [];
+  if (asgIds.length) {
+    const { data } = await sb.from("submissions").select("assignment_id,student_id,score,graded").in("assignment_id", asgIds);
+    subs = data || [];
+  }
+  const map = {};
+  subs.forEach((s) => { map[s.assignment_id + "|" + s.student_id] = s; });
+  const head = `<tr><th>Học sinh</th>${asgList.map((a) => {
+    const short = a.title.length > 16 ? a.title.slice(0, 16) + "…" : a.title;
+    return `<th title="${esc(a.title)}">${esc(short)}<div class="meta">/${a.max_score}</div></th>`;
+  }).join("")}<th>TB</th></tr>`;
+  const rows = (members || []).map((m) => {
+    const st = m.student; let sum = 0, cnt = 0;
+    const cells = asgList.map((a) => {
+      const s = map[a.id + "|" + st.id];
+      if (!s) return `<td class="muted">—</td>`;
+      if (s.score == null) return `<td><span class="badge amber">chờ</span></td>`;
+      sum += Number(s.score); cnt++;
+      return `<td><b>${s.score}</b>${s.graded ? "" : `<span class="meta"> (gợi ý)</span>`}</td>`;
+    }).join("");
+    const avg = cnt ? (Math.round(sum / cnt * 100) / 100) : "—";
+    return `<tr><td>${esc(st.full_name)}</td>${cells}<td><b>${avg}</b></td></tr>`;
+  }).join("");
+  tabc().innerHTML = asgList.length
+    ? `<div class="pill-row"><button class="btn secondary sm" id="exp-grades2">⬇ Tải bảng điểm (CSV)</button></div>
+       <div class="table-wrap"><table><thead>${head}</thead>
+       <tbody>${rows || `<tr><td colspan="${asgList.length + 2}" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>
+       <p class="meta" style="margin-top:8px">"(gợi ý)" = điểm máy chấm Arduino, chưa được giáo viên chốt. "chờ" = đã nộp, chưa chấm.</p>`
+    : `<div class="empty"><div class="em">📊</div><p>Chưa có bài tập nào để tính điểm.</p></div>`;
+  const b = document.getElementById("exp-grades2");
+  if (b) b.onclick = () => exportClassGrades(cid, state.params.name);
+}
+
+/* Bảng điểm của học sinh: theo từng lớp, liệt kê điểm từng bài */
+async function studentGrades() {
+  setContent(`<div class="section-title"><h2>Bảng điểm</h2></div>${loadingHTML()}`);
+  const sid = state.profile.id;
+  const { data: cms } = await sb.from("class_members").select("class:class_id(id,name)").eq("student_id", sid);
+  const classes = (cms || []).map((c) => c.class).filter(Boolean);
+  let html = `<div class="section-title"><h2>Bảng điểm</h2></div>`;
+  if (!classes.length) { setContent(html + `<div class="empty"><div class="em">📊</div><p>Bạn chưa ở lớp nào.</p></div>`); return; }
+  for (const cl of classes) {
+    const { data: asgs } = await sb.from("assignments").select("id,title,type,max_score").eq("class_id", cl.id).order("created_at");
+    const asgList = asgs || [];
+    const ids = asgList.map((a) => a.id);
+    let subs = [];
+    if (ids.length) {
+      const { data } = await sb.from("submissions").select("assignment_id,score,graded").eq("student_id", sid).in("assignment_id", ids);
+      subs = data || [];
+    }
+    const map = {}; subs.forEach((s) => map[s.assignment_id] = s);
+    const rows = asgList.map((a) => {
+      const s = map[a.id]; let diem, tt;
+      if (!s) { diem = "—"; tt = `<span class="badge gray">Chưa nộp</span>`; }
+      else if (s.score == null) { diem = "—"; tt = `<span class="badge amber">Chờ chấm</span>`; }
+      else if (!s.graded) { diem = `${s.score}/${a.max_score}`; tt = `<span class="badge blue">Điểm gợi ý</span>`; }
+      else { diem = `${s.score}/${a.max_score}`; tt = `<span class="badge green">Đã chấm</span>`; }
+      return `<tr><td>${esc(a.title)}</td><td>${TYPE_LABEL[a.type]}</td><td><b>${diem}</b></td><td>${tt}</td></tr>`;
+    }).join("");
+    html += `<div class="card"><b>${esc(cl.name)}</b>
+      ${asgList.length
+        ? `<div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Bài</th><th>Loại</th><th>Điểm</th><th>Trạng thái</th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<p class="muted" style="margin:6px 0 0">Chưa có bài tập.</p>`}</div>`;
+  }
+  setContent(html);
+}
+
 async function openAssignmentModal(cid, existingId) {
   let existing = null, existingQuiz = [];
   if (existingId) {
@@ -1391,18 +1468,31 @@ async function studentAssignmentDetail(a) {
   if (stx === "Chưa mở") { body.innerHTML = inner + `<div class="empty">Bài tập chưa mở.</div>`; return; }
   const closed = stx === "Đã đóng";
 
-  if (mySub && (mySub.graded || a.type === "quiz" || a.type === "arduino")) {
+  // ĐÃ NỘP -> chỉ xem, không cho nộp lại (đến khi giáo viên xoá bài cho làm lại)
+  if (mySub) {
     const scoreLine = mySub.score != null
       ? `<p>${mySub.graded ? "Điểm" : "Điểm gợi ý (chờ GV duyệt)"}: <b>${mySub.score}/${a.max_score}</b></p>`
       : `<p class="muted">Chờ giáo viên chấm.</p>`;
-    inner += `<div class="card" style="margin:0"><b>Bài của bạn</b>
+    let detail = "";
+    if (a.type === "arduino" && mySub.content)
+      detail = `<div style="margin-top:8px"><b>Code đã nộp</b> <span class="meta">(dòng lỗi tô đỏ — di chuột để xem lỗi)</span>${codeView(mySub.content)}</div>`;
+    else if (a.type === "text" && mySub.content)
+      detail = `<div style="margin-top:8px"><b>Bài làm đã nộp:</b><p style="white-space:pre-wrap;margin:4px 0 0">${esc(mySub.content)}</p></div>`;
+    else if (a.type === "file" && mySub.file_url)
+      detail = `<p style="margin-top:8px"><a class="btn secondary sm" href="${esc(mySub.file_url)}" target="_blank">⬇ Tải file đã nộp</a></p>`;
+    inner += `<div class="card" style="margin:0;background:#dcfce7;border-color:#bbf7d0">
+      <b style="color:#15803d">✅ Đã nộp</b> <span class="meta">lúc ${fmtDT(mySub.submitted_at)}</span>
       ${scoreLine}
       ${mySub.auto_feedback ? `<p class="meta" style="white-space:pre-wrap">${esc(mySub.auto_feedback)}</p>` : ""}
       ${mySub.teacher_feedback ? `<div style="margin-top:8px"><b>Nhận xét của giáo viên:</b><p style="white-space:pre-wrap;margin:4px 0 0">${esc(mySub.teacher_feedback)}</p></div>` : ""}
-      ${a.type === "arduino" && mySub.content ? `<div style="margin-top:8px"><b>Code đã nộp</b> <span class="meta">(dòng lỗi tô đỏ — di chuột để xem lỗi)</span>${codeView(mySub.content)}</div>` : ""}
-      <p class="meta" style="margin-top:8px">Nộp lúc: ${fmtDT(mySub.submitted_at)}</p></div>`;
-    if (closed || a.type === "quiz") { body.innerHTML = inner; return; }
+      ${detail}
+      <p class="meta" style="margin-top:10px">Muốn nộp lại? Hãy liên hệ giáo viên để được mở làm lại.</p></div>`;
+    body.innerHTML = inner;
+    return;
   }
+
+  // CHƯA NỘP
+  if (closed) { body.innerHTML = inner + `<div class="empty">Đã đóng — bạn chưa nộp bài.</div>`; return; }
 
   if (a.type === "quiz") {
     const { data: qs } = await sb.from("quiz_questions").select("*").eq("assignment_id", a.id).order("position");
@@ -1411,9 +1501,9 @@ async function studentAssignmentDetail(a) {
       ${["a", "b", "c", "d"].filter((o) => q["option_" + o] || q["option_" + o + "_image"]).map((o) => `
         <label class="opt"><input type="radio" name="q-${q.id}" value="${o.toUpperCase()}"/> <b>${o.toUpperCase()}.</b> ${esc(q["option_" + o] || "")}
         ${q["option_" + o + "_image"] ? `<img src="${esc(q["option_" + o + "_image"])}" style="max-height:110px;border-radius:6px;margin-left:6px;vertical-align:middle"/>` : ""}</label>`).join("")}</div>`).join("");
-    inner += closed ? `<div class="empty">Đã đóng — không thể nộp.</div>` : `<button class="btn block" id="quiz-submit">Nộp bài</button>`;
+    inner += `<button class="btn block" id="quiz-submit">Nộp bài</button>`;
     body.innerHTML = inner;
-    if (!closed) document.getElementById("quiz-submit").onclick = async (e) => {
+    document.getElementById("quiz-submit").onclick = async (e) => {
       const answers = {};
       qs.forEach((q) => { const sel = body.querySelector(`input[name="q-${q.id}"]:checked`); answers[q.id] = sel ? sel.value : ""; });
       let score = 0; qs.forEach((q) => { if (answers[q.id] === q.correct_option) score += Number(q.points); });
@@ -1423,14 +1513,14 @@ async function studentAssignmentDetail(a) {
         auto_feedback: `Chấm tự động: đúng ${qs.filter((q) => answers[q.id] === q.correct_option).length}/${qs.length} câu.`,
         submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
-      if (error) return toast("Lỗi: " + error.message, "err");
+      if (error) { e.target.disabled = false; return toast("Lỗi: " + error.message, "err"); }
       toast(`Đã nộp — ${score}/${a.max_score} điểm`, "ok"); closeModal();
     };
   } else if (a.type === "arduino") {
-    inner += `<div class="field"><label>Dán code Arduino (.ino)</label><textarea id="ar-code" class="code" placeholder="void setup() {\n  ...\n}\nvoid loop() {\n  ...\n}">${esc(mySub?.content || "")}</textarea></div>`;
-    inner += closed ? `<div class="empty">Đã đóng.</div>` : `<button class="btn block" id="ar-submit">Nộp & chấm tự động</button>`;
+    inner += `<div class="field"><label>Dán code Arduino (.ino)</label><textarea id="ar-code" class="code" placeholder="void setup() {\n  ...\n}\nvoid loop() {\n  ...\n}"></textarea></div>
+      <button class="btn block" id="ar-submit">Nộp bài</button>`;
     body.innerHTML = inner;
-    if (!closed) document.getElementById("ar-submit").onclick = async (e) => {
+    document.getElementById("ar-submit").onclick = async (e) => {
       const code = document.getElementById("ar-code").value;
       if (!code.trim()) return toast("Dán code trước khi nộp", "err");
       const r = gradeArduino(code, a.grading_keywords, a.max_score);
@@ -1439,14 +1529,14 @@ async function studentAssignmentDetail(a) {
         assignment_id: a.id, student_id: state.profile.id, content: code,
         score: r.score, graded: false, auto_feedback: r.feedback, submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
-      if (error) return toast("Lỗi: " + error.message, "err");
-      toast(r.hasError ? "Code có lỗi — tạm 0 điểm, chờ GV duyệt" : `Đã nộp — điểm gợi ý ${r.score}/${a.max_score}, chờ GV duyệt`, "ok"); closeModal();
+      if (error) { e.target.disabled = false; return toast("Lỗi: " + error.message, "err"); }
+      toast("Đã nộp bài", "ok"); closeModal();
     };
   } else if (a.type === "file") {
-    inner += `<div class="field"><label>Tải file nộp</label><input id="fl-file" type="file" /></div>`;
-    inner += closed ? `<div class="empty">Đã đóng.</div>` : `<button class="btn block" id="fl-submit">Nộp bài</button>`;
+    inner += `<div class="field"><label>Tải file nộp</label><input id="fl-file" type="file" /></div>
+      <button class="btn block" id="fl-submit">Nộp bài</button>`;
     body.innerHTML = inner;
-    if (!closed) document.getElementById("fl-submit").onclick = async (e) => {
+    document.getElementById("fl-submit").onclick = async (e) => {
       const f = document.getElementById("fl-file").files[0];
       if (!f) return toast("Chọn file", "err");
       e.target.disabled = true; e.target.textContent = "Đang tải...";
@@ -1456,21 +1546,22 @@ async function studentAssignmentDetail(a) {
           assignment_id: a.id, student_id: state.profile.id, file_url: url, graded: false, submitted_at: new Date().toISOString(),
         }, { onConflict: "assignment_id,student_id" });
         if (error) throw error;
-        toast("Đã nộp file", "ok"); closeModal();
+        toast("Đã nộp bài", "ok"); closeModal();
       } catch (err) { toast("Lỗi: " + err.message, "err"); e.target.disabled = false; e.target.textContent = "Nộp bài"; }
     };
   } else { // text
-    inner += `<div class="field"><label>Bài làm</label><textarea id="tx-content" style="min-height:160px">${esc(mySub?.content || "")}</textarea></div>`;
-    inner += closed ? `<div class="empty">Đã đóng.</div>` : `<button class="btn block" id="tx-submit">Nộp bài</button>`;
+    inner += `<div class="field"><label>Bài làm</label><textarea id="tx-content" style="min-height:160px"></textarea></div>
+      <button class="btn block" id="tx-submit">Nộp bài</button>`;
     body.innerHTML = inner;
-    if (!closed) document.getElementById("tx-submit").onclick = async (e) => {
+    document.getElementById("tx-submit").onclick = async (e) => {
       const c = document.getElementById("tx-content").value;
+      if (!c.trim()) return toast("Nhập bài làm trước khi nộp", "err");
       e.target.disabled = true;
       const { error } = await sb.from("submissions").upsert({
         assignment_id: a.id, student_id: state.profile.id, content: c, graded: false, submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
-      if (error) return toast("Lỗi: " + error.message, "err");
-      toast("Đã nộp", "ok"); closeModal();
+      if (error) { e.target.disabled = false; return toast("Lỗi: " + error.message, "err"); }
+      toast("Đã nộp bài", "ok"); closeModal();
     };
   }
 }
