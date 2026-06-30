@@ -169,6 +169,15 @@ td .btn{margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .center-load{display:flex;justify-content:center;padding:50px}
 
+/* ---- code view có tô dòng lỗi ---- */
+.codeblock{font-family:var(--mono);font-size:13px;background:#0f1b2d;color:#e3e8f0;border-radius:9px;overflow:auto;max-height:360px;border:1px solid var(--line)}
+.codeline{display:flex;gap:0;white-space:pre}
+.codeline .ln{flex:none;width:38px;text-align:right;padding:1px 8px;color:#5b6b82;background:rgba(255,255,255,.04);user-select:none}
+.codeline .lt{padding:1px 10px;flex:1}
+.codeline.bad{background:rgba(220,38,38,.22)}
+.codeline.bad .lt{color:#fecaca}
+.codeline.bad .ln{background:rgba(220,38,38,.4);color:#fff;cursor:help}
+
   </style>
 </head>
 <body>
@@ -1383,10 +1392,15 @@ async function studentAssignmentDetail(a) {
   const closed = stx === "Đã đóng";
 
   if (mySub && (mySub.graded || a.type === "quiz" || a.type === "arduino")) {
+    const scoreLine = mySub.score != null
+      ? `<p>${mySub.graded ? "Điểm" : "Điểm gợi ý (chờ GV duyệt)"}: <b>${mySub.score}/${a.max_score}</b></p>`
+      : `<p class="muted">Chờ giáo viên chấm.</p>`;
     inner += `<div class="card" style="margin:0"><b>Bài của bạn</b>
-      ${mySub.score != null ? `<p>Điểm: <b>${mySub.score}/${a.max_score}</b></p>` : `<p class="muted">Chờ giáo viên chấm.</p>`}
+      ${scoreLine}
       ${mySub.auto_feedback ? `<p class="meta" style="white-space:pre-wrap">${esc(mySub.auto_feedback)}</p>` : ""}
-      <p class="meta">Nộp lúc: ${fmtDT(mySub.submitted_at)}</p></div>`;
+      ${mySub.teacher_feedback ? `<div style="margin-top:8px"><b>Nhận xét của giáo viên:</b><p style="white-space:pre-wrap;margin:4px 0 0">${esc(mySub.teacher_feedback)}</p></div>` : ""}
+      ${a.type === "arduino" && mySub.content ? `<div style="margin-top:8px"><b>Code đã nộp</b> <span class="meta">(dòng lỗi tô đỏ — di chuột để xem lỗi)</span>${codeView(mySub.content)}</div>` : ""}
+      <p class="meta" style="margin-top:8px">Nộp lúc: ${fmtDT(mySub.submitted_at)}</p></div>`;
     if (closed || a.type === "quiz") { body.innerHTML = inner; return; }
   }
 
@@ -1423,10 +1437,10 @@ async function studentAssignmentDetail(a) {
       e.target.disabled = true;
       const { error } = await sb.from("submissions").upsert({
         assignment_id: a.id, student_id: state.profile.id, content: code,
-        score: r.score, graded: true, auto_feedback: r.feedback, submitted_at: new Date().toISOString(),
+        score: r.score, graded: false, auto_feedback: r.feedback, submitted_at: new Date().toISOString(),
       }, { onConflict: "assignment_id,student_id" });
       if (error) return toast("Lỗi: " + error.message, "err");
-      toast(`Đã nộp — gợi ý ${r.score}/${a.max_score} điểm`, "ok"); closeModal();
+      toast(r.hasError ? "Code có lỗi — tạm 0 điểm, chờ GV duyệt" : `Đã nộp — điểm gợi ý ${r.score}/${a.max_score}, chờ GV duyệt`, "ok"); closeModal();
     };
   } else if (a.type === "file") {
     inner += `<div class="field"><label>Tải file nộp</label><input id="fl-file" type="file" /></div>`;
@@ -1462,29 +1476,81 @@ async function studentAssignmentDetail(a) {
 }
 
 /* Chấm tự động Arduino — dựa trên cấu trúc & từ khoá (heuristic, không biên dịch thật) */
+/* Kiểm tra lỗi cấu trúc code Arduino (tĩnh, không biên dịch thật). Trả về danh sách lỗi kèm số dòng. */
+function lintArduino(raw) {
+  const errors = [];
+  const code = raw || "";
+  if (!code.trim()) { errors.push({ line: 1, msg: "Code trống" }); return { errors }; }
+  const lines = code.split(/\r?\n/);
+  let inBlock = false, braceBal = 0, parenBal = 0, negBrace = 0, negParen = 0;
+  lines.forEach((s, idx) => {
+    const lineNo = idx + 1;
+    let cleaned = "";
+    for (let i = 0; i < s.length; i++) {
+      if (inBlock) { if (s[i] === "*" && s[i + 1] === "/") { inBlock = false; i++; } continue; }
+      if (s[i] === "/" && s[i + 1] === "*") { inBlock = true; i++; continue; }
+      if (s[i] === "/" && s[i + 1] === "/") break;
+      cleaned += s[i];
+    }
+    let noStr = "", inStr = false, strCh = "", esc = false;
+    for (let i = 0; i < cleaned.length; i++) {
+      const c = cleaned[i];
+      if (inStr) { if (esc) { esc = false; continue; } if (c === "\\") { esc = true; continue; } if (c === strCh) inStr = false; continue; }
+      if (c === '"' || c === "'") { inStr = true; strCh = c; continue; }
+      noStr += c;
+    }
+    if (inStr) errors.push({ line: lineNo, msg: "Chuỗi/ký tự chưa đóng dấu nháy" });
+    for (const c of noStr) {
+      if (c === "{") braceBal++;
+      else if (c === "}") { braceBal--; if (braceBal < 0 && !negBrace) negBrace = lineNo; }
+      else if (c === "(") parenBal++;
+      else if (c === ")") { parenBal--; if (parenBal < 0 && !negParen) negParen = lineNo; }
+    }
+  });
+  if (inBlock) errors.push({ line: lines.length, msg: "Comment /* */ chưa đóng" });
+  if (negBrace) errors.push({ line: negBrace, msg: "Thừa dấu } (đóng ngoặc nhọn dư)" });
+  else if (braceBal > 0) errors.push({ line: lines.length, msg: `Thiếu ${braceBal} dấu } (chưa đóng ngoặc nhọn)` });
+  if (negParen) errors.push({ line: negParen, msg: "Thừa dấu )" });
+  else if (parenBal > 0) errors.push({ line: lines.length, msg: `Thiếu ${parenBal} dấu )` });
+  const lc = code.toLowerCase();
+  if (!/void\s+setup\s*\(/.test(lc)) errors.push({ line: 1, msg: "Thiếu hàm void setup()" });
+  if (!/void\s+loop\s*\(/.test(lc)) errors.push({ line: 1, msg: "Thiếu hàm void loop()" });
+  return { errors };
+}
+/* HTML hiển thị code, dòng lỗi tô đỏ + di chuột xem lỗi (title) */
+function codeView(code) {
+  const { errors } = lintArduino(code || "");
+  const errMap = {};
+  errors.forEach((e) => { (errMap[e.line] = errMap[e.line] || []).push(e.msg); });
+  const lines = (code || "").split(/\r?\n/);
+  const rows = lines.map((ln, i) => {
+    const no = i + 1, bad = errMap[no];
+    return `<div class="codeline${bad ? " bad" : ""}"${bad ? ` title="${esc(bad.join("; "))}"` : ""}>` +
+      `<span class="ln">${no}</span><span class="lt">${esc(ln) || " "}</span></div>`;
+  }).join("");
+  return `<div class="codeblock">${rows}</div>`;
+}
+/* Chấm Arduino: có lỗi -> 0đ + nêu lỗi; không lỗi -> điểm gợi ý theo từ khoá (chờ GV duyệt) */
 function gradeArduino(code, keywordsStr, maxScore) {
-  const raw = code || "";
-  const c = raw.toLowerCase();
-  const fb = [];
-  const hasSetup = /void\s+setup\s*\(/.test(c);
-  const hasLoop = /void\s+loop\s*\(/.test(c);
-  const balanced = (raw.split("{").length === raw.split("}").length) && (raw.split("(").length === raw.split(")").length);
-  fb.push(hasSetup ? "✓ Có hàm setup()" : "✗ Thiếu hàm setup()");
-  fb.push(hasLoop ? "✓ Có hàm loop()" : "✗ Thiếu hàm loop()");
-  fb.push(balanced ? "✓ Dấu ngoặc {} () cân đối" : "✗ Dấu ngoặc chưa cân đối");
+  const { errors } = lintArduino(code);
+  if (errors.length) {
+    const fb = "❌ Phát hiện lỗi trong code — đề nghị 0 điểm:\n" +
+      errors.map((e) => `• Dòng ${e.line}: ${e.msg}`).join("\n");
+    return { score: 0, feedback: fb, hasError: true };
+  }
+  const c = (code || "").toLowerCase();
   const kws = (keywordsStr || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const fb = ["✓ Không phát hiện lỗi cấu trúc rõ ràng (chưa biên dịch thật)."];
   let kwScore = 1;
   if (kws.length) {
     const found = kws.filter((k) => c.includes(k.toLowerCase()));
     const missing = kws.filter((k) => !c.includes(k.toLowerCase()));
     kwScore = found.length / kws.length;
-    fb.push(`Từ khoá: tìm thấy ${found.length}/${kws.length}.` + (missing.length ? ` Thiếu: ${missing.join(", ")}.` : ""));
-  } else fb.push("Không có từ khoá chấm — chỉ tính theo cấu trúc.");
-  const structScore = ((hasSetup ? 1 : 0) + (hasLoop ? 1 : 0) + (balanced ? 1 : 0)) / 3;
-  const ratio = kws.length ? (0.35 * structScore + 0.65 * kwScore) : structScore;
-  const score = Math.round(ratio * maxScore * 100) / 100;
-  fb.push(`→ Điểm gợi ý: ${score}/${maxScore} (giáo viên có thể điều chỉnh).`);
-  return { score, feedback: fb.join("\n") };
+    fb.push(`Từ khoá yêu cầu: đạt ${found.length}/${kws.length}.` + (missing.length ? ` Thiếu: ${missing.join(", ")}.` : ""));
+  } else fb.push("Chưa khai từ khoá chấm — chỉ ước lượng theo cấu trúc.");
+  const score = Math.round(kwScore * maxScore * 100) / 100;
+  fb.push(`→ Điểm gợi ý: ${score}/${maxScore} (chờ giáo viên duyệt).`);
+  return { score, feedback: fb.join("\n"), hasError: false };
 }
 
 /* ----- Giáo viên: xem & chấm bài nộp ----- */
@@ -1497,15 +1563,14 @@ async function teacherAssignmentDetail(a) {
   const subMap = {}; (subs || []).forEach((s) => subMap[s.student_id] = s);
   const rows = (members || []).map((m) => {
     const st = m.student; const s = subMap[st.id];
-    if (!s) return `<tr><td>${esc(st.full_name)}</td><td><span class="badge gray">Chưa nộp</span></td><td>—</td><td></td></tr>`;
-    const view = s.file_url ? `<a href="${esc(s.file_url)}" target="_blank">Tải file</a>`
-      : s.content ? `<button class="btn ghost sm" data-view="${st.id}">Xem bài</button>` : "—";
+    if (!s) return `<tr><td>${esc(st.full_name)}</td><td><span class="badge gray">Chưa nộp</span></td><td></td></tr>`;
+    const scoreCell = s.score != null ? `<b>${s.score}/${a.max_score}</b>` : "—";
+    const stBadge = s.graded ? `<span class="badge green">đã chấm</span>` : `<span class="badge amber">chờ chấm</span>`;
     return `<tr>
       <td>${esc(st.full_name)}<div class="meta">${fmtDT(s.submitted_at)}</div></td>
-      <td>${view}</td>
-      <td><input type="number" data-score="${s.id}" value="${s.score ?? ""}" style="width:80px" placeholder="đ"/></td>
+      <td>${scoreCell} ${stBadge}</td>
       <td style="white-space:nowrap">
-        <button class="btn sm" data-save="${s.id}">Lưu</button>
+        <button class="btn sm" data-grade="${st.id}">Chấm</button>
         <button class="btn danger sm" data-resub="${s.id}" data-name="${esc(st.full_name)}">Xoá để làm lại</button>
       </td>
     </tr>`;
@@ -1515,26 +1580,19 @@ async function teacherAssignmentDetail(a) {
       <button class="btn secondary sm" id="exp-one">⬇ Tải điểm (CSV)</button></div>
     <h3 style="margin:0 0 4px">${esc(a.title)}</h3>
     ${a.description ? `<p class="muted" style="white-space:pre-wrap">${esc(a.description)}</p>` : ""}
-    <div class="table-wrap"><table><thead><tr><th>Học sinh</th><th>Bài nộp</th><th>Điểm</th><th></th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="4" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Học sinh</th><th>Điểm</th><th>Thao tác</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="3" class="empty">Lớp chưa có học sinh.</td></tr>`}</tbody></table></div>`;
   document.getElementById("exp-one").onclick = () => {
-    const r = [["Học sinh", "Trạng thái", "Thời gian nộp", `Điểm (/${a.max_score})`]];
+    const r = [["Học sinh", "Trạng thái", "Thời gian nộp", `Điểm (/${a.max_score})`, "Nhận xét"]];
     (members || []).forEach((m) => {
       const s = subMap[m.student.id];
-      r.push([m.student.full_name, s ? "Đã nộp" : "Chưa nộp", s ? fmtDT(s.submitted_at) : "", s && s.score != null ? s.score : ""]);
+      r.push([m.student.full_name, s ? "Đã nộp" : "Chưa nộp", s ? fmtDT(s.submitted_at) : "", s && s.score != null ? s.score : "", s ? (s.teacher_feedback || "") : ""]);
     });
     downloadCSV(`diem-${(a.title || "bai").replace(/\s+/g, "_")}.csv`, r);
   };
-  on("[data-save]", "click", async (e) => {
-    const id = e.currentTarget.dataset.save;
-    const val = body.querySelector(`[data-score="${id}"]`).value;
-    const { error } = await sb.from("submissions").update({ score: val === "" ? null : Number(val), graded: true }).eq("id", id);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã lưu điểm", "ok");
-  }, body);
-  on("[data-view]", "click", (e) => {
-    const s = subMap[e.currentTarget.dataset.view];
-    showModal("Bài làm — " + esc(s.student?.full_name || ""), `<textarea class="code" readonly style="min-height:300px">${esc(s.content)}</textarea>${s.auto_feedback ? `<p class="meta" style="white-space:pre-wrap">${esc(s.auto_feedback)}</p>` : ""}`, `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  on("[data-grade]", "click", (e) => {
+    const s = subMap[e.currentTarget.dataset.grade];
+    openGradeModal(s, a);
   }, body);
   on("[data-resub]", "click", async (e) => {
     const name = e.currentTarget.dataset.name;
@@ -1544,6 +1602,36 @@ async function teacherAssignmentDetail(a) {
     toast("Đã xoá — học sinh có thể làm lại", "ok");
     teacherAssignmentDetail(a);
   }, body);
+}
+
+/* Modal chấm chi tiết: xem bài (code tô lỗi) + điểm + nhận xét */
+function openGradeModal(s, a) {
+  const name = s.student?.full_name || "";
+  let view = "";
+  if (a.type === "arduino") view = `<label>Code đã nộp <span class="meta">(dòng lỗi tô đỏ — di chuột để xem lỗi)</span></label>${codeView(s.content)}`;
+  else if (a.type === "text") view = `<label>Bài làm</label><div class="codeblock" style="padding:8px;white-space:pre-wrap">${esc(s.content) || "(trống)"}</div>`;
+  else if (a.type === "file") view = s.file_url ? `<a class="btn secondary sm" href="${esc(s.file_url)}" target="_blank">⬇ Tải file bài nộp</a>` : `<p class="muted">Không có file.</p>`;
+  else if (a.type === "quiz") view = `<p class="muted">Bài trắc nghiệm đã chấm tự động.</p>`;
+  const autoFb = s.auto_feedback ? `<div class="card" style="margin:10px 0 0;background:var(--surface-2)"><b>Máy chấm:</b><div class="meta" style="white-space:pre-wrap;margin-top:4px">${esc(s.auto_feedback)}</div></div>` : "";
+  showModal("Chấm bài — " + esc(name), `
+    ${view}
+    ${autoFb}
+    <div class="field" style="max-width:160px;margin-top:14px"><label>Điểm (/${a.max_score})</label><input id="gd-score" type="number" value="${s.score ?? ""}" /></div>
+    <div class="field"><label>Nhận xét cho học sinh</label>
+      <textarea id="gd-fb" style="min-height:90px" placeholder="VD: Dòng 8 dùng delay(2000) sai yêu cầu (đề cần 100ms).">${esc(s.teacher_feedback || "")}</textarea></div>`,
+    `<button class="btn secondary" id="gd-cancel">Đóng</button><button class="btn" id="gd-save">Lưu điểm & nhận xét</button>`, "lg");
+  document.getElementById("gd-cancel").onclick = () => openAssignmentDetail(a.id, a.class_id, true);
+  document.getElementById("gd-save").onclick = async (e) => {
+    const val = document.getElementById("gd-score").value;
+    const fb = document.getElementById("gd-fb").value;
+    e.target.disabled = true;
+    const { error } = await sb.from("submissions").update({
+      score: val === "" ? null : Number(val), teacher_feedback: fb, graded: true,
+    }).eq("id", s.id);
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast("Đã lưu điểm & nhận xét", "ok");
+    openAssignmentDetail(a.id, a.class_id, true);
+  };
 }
 
 /* ---- 9.4 Điểm danh (GV) ---- */
