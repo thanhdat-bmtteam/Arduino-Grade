@@ -1339,7 +1339,7 @@ async function tabClassGrades(cid) {
   const asgIds = asgList.map((a) => a.id);
   let subs = [];
   if (asgIds.length) {
-    const { data } = await sb.from("submissions").select("assignment_id,student_id,score,graded").in("assignment_id", asgIds);
+    const { data } = await sb.from("submissions").select("id,assignment_id,student_id,score,graded").in("assignment_id", asgIds);
     subs = data || [];
   }
   const map = {};
