@@ -1346,10 +1346,10 @@ async function tabClassGrades(cid) {
   subs.forEach((s) => { map[s.assignment_id + "|" + s.student_id] = s; });
   const attBy = {};
   (att || []).forEach((a) => { (attBy[a.student_id] = attBy[a.student_id] || []).push(a.status); });
-  const head = `<tr><th>Học sinh</th><th>Điểm danh<div class="meta">/10</div></th>${asgList.map((a) => {
+  const head = `<tr><th>Học sinh</th><th>Điểm danh</th>${asgList.map((a) => {
     const short = a.title.length > 14 ? a.title.slice(0, 14) + "…" : a.title;
     const tag = a.category === "final" ? " ★" : "";
-    return `<th title="${esc(a.title)}${a.category === "final" ? " (Cuối khoá)" : ""}">${esc(short)}${tag}<div class="meta">/${a.max_score}</div></th>`;
+    return `<th title="${esc(a.title)} (thang /${a.max_score})${a.category === "final" ? " · Cuối khoá" : ""}">${esc(short)}${tag}</th>`;
   }).join("")}<th>Tổng kết</th></tr>`;
   const rows = (members || []).map((m) => {
     const st = m.student; const procNorms = [], finNorms = [];
