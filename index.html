@@ -975,14 +975,16 @@ async function bizProjects() {
     const chi = (invBy[(p.name || "").trim()] || 0) + (expBy[p.id] || 0);
     const ln = thu - chi;
     tQuote += Number(p.quote || 0); tThu += thu; tChi += chi;
-    return `<div class="card"><div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
-        <b>${esc(p.name)}</b>
-        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
+    return `<div class="card">
+        <div style="font-weight:700">${esc(p.name)}</div>
+        <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
+        <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px">
+          <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
           <button class="btn ghost sm" data-pjed="${p.id}">Sửa</button>
-          <button class="btn danger sm" data-pjdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></div></div>
-      <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
-      <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div></div>`;
+          <button class="btn danger sm" data-pjdel="${p.id}" data-name="${esc(p.name)}">Xoá</button>
+        </div></div>`;
   }).join("");
   const stat = (label, val, color) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
   bcontent().innerHTML = `
