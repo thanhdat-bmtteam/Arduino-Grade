@@ -1028,14 +1028,16 @@ function openProjectModal(ex) {
 async function projectDetail(p) {
   showModal("Dự án — " + esc(p.name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const [{ data: invoices }, { data: expenses }, { data: incomes }, { data: emps }, { data: ndRow }] = await Promise.all([
+  const [{ data: invoices }, { data: expenses }, { data: incomes }, { data: emps }, { data: ndRow }, { data: priceRow }] = await Promise.all([
     sb.from("biz_invoices").select("id,customer,invoice_date,total").eq("project_name", p.name),
     sb.from("biz_expenses").select("*").eq("project_id", p.id).order("created_at", { ascending: false }),
     sb.from("biz_incomes").select("*").eq("project_id", p.id).order("income_date", { ascending: false }),
     sb.from("biz_employees").select("name").order("name"),
     sb.from("biz_settings").select("value").eq("key", "chi_noidung").maybeSingle(),
+    sb.from("biz_settings").select("value").eq("key", "chi_giagoi").maybeSingle(),
   ]);
   const ndList = (ndRow && ndRow.value && ndRow.value.list) || [];
+  const priceMap = (priceRow && priceRow.value) || {};
   const empNames = (emps || []).map((e) => e.name);
   const invSum = (invoices || []).reduce((s, x) => s + Number(x.total || 0), 0);
   const expSum = (expenses || []).reduce((s, x) => s + Number(x.amount || 0), 0);
@@ -1072,8 +1074,15 @@ async function projectDetail(p) {
       <div class="field" style="max-width:120px;margin:0"><label>Số tiền</label><input id="exp-amt" type="number"/></div>
       <div class="field" style="max-width:150px;margin:0"><label>Ngày</label><input id="exp-date" type="date" value="${new Date().toISOString().slice(0, 10)}"/></div>
       <button class="btn" id="exp-add" type="button">Thêm chi NV</button></div>
-    <div class="help">Khoản chi có tên nhân viên sẽ tự cộng vào lương của người đó ở thẻ Nhân viên.</div>`;
+    <div class="help">Chọn Nội dung có sẵn sẽ tự điền số tiền gợi ý (vẫn sửa được). Khoản chi có tên nhân viên sẽ tự cộng vào lương của người đó ở thẻ Nhân viên.</div>`;
   document.getElementById("pj-exp").onclick = () => exportProjectInvoicesModal(p);
+  {
+    const noteEl = document.getElementById("exp-note"), amtEl = document.getElementById("exp-amt");
+    const applyPrice = () => { const v = noteEl.value.trim(); if (priceMap[v] != null && !amtEl.dataset.touched) amtEl.value = priceMap[v]; };
+    noteEl.addEventListener("input", applyPrice);
+    noteEl.addEventListener("change", applyPrice);
+    amtEl.addEventListener("input", () => { amtEl.dataset.touched = "1"; });
+  }
   document.getElementById("inc-add").onclick = async (e) => {
     const amt = Number(document.getElementById("inc-amt").value) || 0;
     if (!amt) return toast("Nhập số tiền", "err");
