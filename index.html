@@ -501,9 +501,8 @@ async function bizPrices() {
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải bảng giá: ${esc(error.message)}</div>`; return; }
   const map = {}; (data || []).forEach((p) => map[p.id] = p);
   const rows = (data || []).map((p) => `<tr>
-    <td>${esc(p.name)}${p.note ? `<div class="meta">${esc(p.note)}</div>` : ""}</td>
+    <td>${esc(p.name)}${p.note ? `<div class="meta">${esc(p.note)}</div>` : ""}${p.category === "service" ? ' <span class="badge blue">Dịch vụ</span>' : ""}</td>
     <td>${esc(p.unit || "")}</td><td><b>${fmtVND(p.price)}</b></td>
-    <td>${p.category === "service" ? '<span class="badge blue">Dịch vụ</span>' : '<span class="badge gray">Linh kiện</span>'}</td>
     <td style="white-space:nowrap"><button class="btn ghost sm" data-ped="${p.id}">Sửa</button>
       <button class="btn danger sm" data-pdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></td></tr>`).join("");
   bcontent().innerHTML = `
@@ -512,8 +511,8 @@ async function bizPrices() {
       <button class="btn secondary" id="price-imp">⬆ Import CSV</button>
       <input type="file" id="price-file" accept=".csv,text/csv" style="display:none"/></div>
     <p class="meta" style="margin:0 0 8px">Tổng: <b>${(data || []).length}</b> mặt hàng</p>
-    <div class="table-wrap"><table><thead><tr><th>Tên</th><th>ĐVT</th><th>Đơn giá</th><th>Loại</th><th>Thao tác</th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="5" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Tên</th><th>ĐVT</th><th>Đơn giá</th><th>Thao tác</th></tr></thead>
+    <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
   document.getElementById("price-new").onclick = () => openPriceModal();
   document.getElementById("price-exp").onclick = () => {
     const r = [["Tên", "ĐVT", "Đơn giá", "Loại", "Ghi chú"]];
