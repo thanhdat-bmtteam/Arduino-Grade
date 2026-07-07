@@ -485,13 +485,13 @@ function bizHome() {
   const r = state.profile.role;
   if (!["admin", "leader", "accountant"].includes(r)) { routeDefault(); return; }
   const tab = state.params.btab || "invoices";
-  const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
+  const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["stock", "Kho"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
   setContent(`
     <div class="section-title"><h2>Quản lý</h2></div>
     <div class="tabbar">${tabs.map(([k, l]) => `<button data-btab="${k}" class="${tab === k ? "active" : ""}">${esc(l)}</button>`).join("")}</div>
     <div id="bcontent">${loadingHTML()}</div>`);
   on("[data-btab]", "click", (e) => go("biz-home", { btab: e.currentTarget.dataset.btab }), content());
-  ({ invoices: bizInvoices, prices: bizPrices, projects: bizProjects, employees: bizEmployees }[tab] || bizInvoices)();
+  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees }[tab] || bizInvoices)();
 }
 
 /* ---------- Bảng giá ---------- */
@@ -609,10 +609,21 @@ async function bizInvoices() {
   on("[data-ived]", "click", (e) => { e.stopPropagation(); openInvoiceModal(map[e.currentTarget.dataset.ived]); }, bcontent());
   on("[data-ivdel]", "click", async (e) => {
     e.stopPropagation();
+    const iv = map[e.currentTarget.dataset.ivdel];
     if (!confirm("Xoá hoá đơn này?")) return;
-    const { error } = await sb.from("biz_invoices").delete().eq("id", e.currentTarget.dataset.ivdel);
+    const restore = confirm("Khôi phục số lượng linh kiện về Kho?\n\nOK = Có (cộng lại số lượng)\nCancel = Không (giữ nguyên tồn)");
+    const { error } = await sb.from("biz_invoices").delete().eq("id", iv.id);
     if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã xoá", "ok"); bizInvoices();
+    if (restore) {
+      try {
+        const nm = await stockNameMap();
+        const d = stockDeltasFromItems(iv.items || [], nm);
+        const dNeg = {}; Object.keys(d).forEach((k) => dNeg[k] = -d[k]); // âm = cộng lại kho
+        await applyStockDelta(dNeg, { silent: true });
+        toast("Đã xoá và khôi phục kho", "ok");
+      } catch (err) { console.error(err); toast("Đã xoá (không khôi phục được kho: " + err.message + ")", "err"); }
+    } else toast("Đã xoá (giữ nguyên tồn kho)", "ok");
+    bizInvoices();
   }, bcontent());
 }
 async function giaCongSettings() {
@@ -794,6 +805,15 @@ async function openInvoiceModal(ex) {
     if (ex.id) res = await sb.from("biz_invoices").update(payload).eq("id", ex.id);
     else { payload.created_by = state.profile.id; res = await sb.from("biz_invoices").insert(payload); }
     if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
+    try {
+      const nm = await stockNameMap();
+      const dNew = stockDeltasFromItems(items, nm);
+      const dOld = stockDeltasFromItems(ex.items || [], nm);
+      const dCombined = {};
+      Object.keys(dNew).forEach((k) => dCombined[k] = (dCombined[k] || 0) + dNew[k]);
+      Object.keys(dOld).forEach((k) => dCombined[k] = (dCombined[k] || 0) - dOld[k]);
+      await applyStockDelta(dCombined);
+    } catch (err) { console.error("stock update failed:", err); }
     toast("Đã lưu hoá đơn", "ok"); closeModal(); bizInvoices();
   };
 }
@@ -1336,6 +1356,83 @@ function printPayslip(emp, items, total, payer) {
   </body></html>`);
   w.document.close();
 }
+
+/* ---------- KHO tồn linh kiện ---------- */
+// Trả về map { name(lowercase) -> price_item_id } chỉ với category='item'.
+async function stockNameMap() {
+  const { data } = await sb.from("biz_price_items").select("id,name,category").eq("category", "item");
+  const m = {}; (data || []).forEach((p) => m[(p.name || "").trim().toLowerCase()] = p.id);
+  return m;
+}
+// Gom số lượng theo price_item_id từ items của hoá đơn (bỏ dòng gia công / không có trong Bảng giá).
+function stockDeltasFromItems(items, nameMap) {
+  const d = {};
+  (items || []).forEach((it) => {
+    const key = (it.name || "").trim().toLowerCase();
+    const id = nameMap[key]; if (!id) return;
+    d[id] = (d[id] || 0) + (Number(it.qty) || 0);
+  });
+  return d;
+}
+// Áp dụng delta số lượng lên kho: delta > 0 là giảm kho; < 0 là hoàn kho.
+// Trả về danh sách cảnh báo "thiếu kho" (không chặn).
+async function applyStockDelta(delta, opts) {
+  const ids = Object.keys(delta).filter((k) => delta[k] !== 0);
+  if (!ids.length) return [];
+  const { data: rows } = await sb.from("biz_stock").select("*").in("price_item_id", ids);
+  const cur = {}; (rows || []).forEach((r) => cur[r.price_item_id] = Number(r.qty) || 0);
+  const { data: names } = await sb.from("biz_price_items").select("id,name").in("id", ids);
+  const nameById = {}; (names || []).forEach((p) => nameById[p.id] = p.name);
+  const warns = [];
+  const now = new Date().toISOString();
+  const ups = ids.map((id) => {
+    const before = cur[id] || 0;
+    const after = before - delta[id];
+    if (delta[id] > 0 && after < 0) warns.push(`${nameById[id] || "?"}: tồn ${before}, cần ${delta[id]} → còn ${after}`);
+    return { price_item_id: id, qty: after, updated_at: now };
+  });
+  await sb.from("biz_stock").upsert(ups, { onConflict: "price_item_id" });
+  if (warns.length && !(opts && opts.silent)) toast("⚠ Thiếu kho:\n" + warns.join("\n"), "err");
+  return warns;
+}
+async function bizStock() {
+  bcontent().innerHTML = loadingHTML();
+  const [{ data: items, error }, { data: rows }] = await Promise.all([
+    sb.from("biz_price_items").select("id,name,unit,category").eq("category", "item").order("name"),
+    sb.from("biz_stock").select("*"),
+  ]);
+  if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải kho: ${esc(error.message)}</div>`; return; }
+  const qty = {}; (rows || []).forEach((r) => qty[r.price_item_id] = Number(r.qty) || 0);
+  const list = items || [];
+  bcontent().innerHTML = `
+    <div class="pill-row">
+      <input id="st-q" placeholder="🔎 Tìm tên linh kiện…" style="max-width:280px"/>
+      <button class="btn secondary" id="st-csv">⬇ Xuất CSV</button></div>
+    <p class="meta" style="margin:0 0 8px">Nguồn linh kiện lấy từ <b>Bảng giá</b> (loại "Linh kiện"). Gõ số vào ô để chỉnh tồn kho (bấm Enter/rời ô để lưu).</p>
+    <div class="table-wrap"><table><thead><tr><th>Tên linh kiện</th><th>ĐVT</th><th style="text-align:right;width:140px">Tồn kho</th></tr></thead>
+    <tbody id="st-body">${list.map((p) => { const v = qty[p.id] || 0; return `<tr data-name="${esc((p.name || "").toLowerCase())}">
+        <td>${esc(p.name)}</td><td>${esc(p.unit || "")}</td>
+        <td style="text-align:right"><input class="st-qty" data-id="${p.id}" data-prev="${v}" type="number" step="1" value="${v}" style="width:110px;text-align:right;${v < 0 ? "color:var(--red);font-weight:700" : ""}"/></td></tr>`; }).join("") || `<tr><td colspan="3" class="empty">Bảng giá chưa có mục "Linh kiện" nào.</td></tr>`}</tbody></table></div>`;
+  const filter = () => {
+    const q = document.getElementById("st-q").value.trim().toLowerCase();
+    document.querySelectorAll("#st-body tr").forEach((tr) => { tr.style.display = !q || (tr.dataset.name || "").includes(q) ? "" : "none"; });
+  };
+  document.getElementById("st-q").oninput = filter;
+  document.getElementById("st-csv").onclick = () => {
+    const r = [["Tên", "ĐVT", "Tồn kho"]];
+    list.forEach((p) => r.push([p.name, p.unit || "", qty[p.id] || 0]));
+    downloadCSV("ton-kho.csv", r);
+  };
+  on(".st-qty", "change", async (e) => {
+    const inp = e.currentTarget; const id = inp.dataset.id;
+    const v = Number(inp.value); if (Number.isNaN(v)) { inp.value = inp.dataset.prev; return; }
+    const { error } = await sb.from("biz_stock").upsert({ price_item_id: id, qty: v, updated_at: new Date().toISOString() }, { onConflict: "price_item_id" });
+    if (error) { toast("Lỗi: " + error.message, "err"); inp.value = inp.dataset.prev; return; }
+    inp.dataset.prev = v; inp.style.color = v < 0 ? "var(--red)" : ""; inp.style.fontWeight = v < 0 ? "700" : "";
+    toast("Đã lưu tồn kho", "ok");
+  }, bcontent());
+}
+
 async function openPayrollModal(empId, ex, onDone) {
   ex = ex || {};
   const { data: projs } = await sb.from("biz_projects").select("name").order("name");
