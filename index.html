@@ -1139,43 +1139,43 @@ async function projectDetail(p) {
   // ===== Nhiệm vụ (task) — Admin quản lý, Leader chỉ xem =====
   const isAdmin = state.profile.role === "admin";
   const [{ data: tasks }, { data: leaders }] = await Promise.all([
-    sb.from("biz_tasks").select("*").eq("project_id", p.id).order("deadline", { ascending: true, nullsFirst: false }),
+    sb.from("biz_tasks").select("*").eq("project_id", p.id).order("created_at", { ascending: true }),
     sb.from("profiles").select("id,full_name").eq("role", "leader").order("full_name"),
   ]);
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
-  const stx = (s) => s === "done" ? '<span class="badge green">Hoàn tất</span>' : s === "doing" ? '<span class="badge amber">Đang làm</span>' : '<span class="badge gray">Chưa làm</span>';
-  const overdue = (d, s) => d && s !== "done" && new Date(d) < new Date(new Date().toDateString());
-  const trows = (tasks || []).map((t) => `<tr${overdue(t.deadline, t.status) ? ' style="background:rgba(220,38,38,.08)"' : ""}>
-    <td><b>${esc(t.title)}</b>${t.description ? `<div class="meta">${esc(t.description)}</div>` : ""}${t.drive_url ? `<div class="meta"><a target="_blank" rel="noopener" href="${esc(t.drive_url)}">📁 Tài liệu</a></div>` : ""}</td>
+  const stx = (s) => s === "done" ? '<span class="badge green">Đã duyệt</span>'
+    : s === "review" ? '<span class="badge amber">Chờ duyệt</span>'
+    : s === "revise" ? '<span class="badge red">Cần sửa</span>'
+    : '<span class="badge gray">Chờ làm</span>';
+  const trows = (tasks || []).map((t) => `<tr>
+    <td><b>${esc(t.title)}</b>${t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : ""}</td>
     <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}</td>
-    <td>${t.deadline ? fmtDate(t.deadline) : "—"}${overdue(t.deadline, t.status) ? ' <span class="badge red">Quá hạn</span>' : ""}</td>
     <td>${stx(t.status)}</td>
-    ${isAdmin ? `<td style="white-space:nowrap"><button class="btn ghost sm" data-tked="${t.id}">Sửa</button><button class="btn danger sm" data-tkdel="${t.id}">✕</button></td>` : ""}</tr>`).join("");
+    <td style="white-space:nowrap">
+      ${t.status === "review" ? `<button class="btn success sm" data-tkapprove="${t.id}">✓ Duyệt</button><button class="btn danger sm" data-tkrevise="${t.id}">Yêu cầu sửa</button>` : ""}
+      ${t.status === "done" ? `<button class="btn ghost sm" data-tkreopen="${t.id}">Mở lại</button>` : ""}
+      <button class="btn ghost sm" data-tked="${t.id}">Sửa</button>
+      <button class="btn danger sm" data-tkdel="${t.id}">✕</button></td></tr>`).join("");
   body.insertAdjacentHTML("beforeend", `
     <h3 style="font-size:14px;margin:16px 0 4px">Phân công nhiệm vụ</h3>
     ${isAdmin ? `<div class="pill-row" style="margin-bottom:6px"><button class="btn sm" id="tk-new">＋ Thêm nhiệm vụ</button></div>` : `<p class="meta">Chỉ Admin được sửa. Nhóm Leader xem chung.</p>`}
-    <div class="table-wrap"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Deadline</th><th>Trạng thái</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
-    <tbody id="tk-body">${trows || `<tr><td colspan="${isAdmin ? 5 : 4}" class="empty">Chưa có phần việc nào.</td></tr>`}</tbody></table></div>`);
+    <div class="table-wrap"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
+    <tbody id="tk-body">${trows || `<tr><td colspan="${isAdmin ? 4 : 3}" class="empty">Chưa có phần việc nào.</td></tr>`}</tbody></table></div>`);
   if (isAdmin) {
     const openTaskModal = (ex) => {
       ex = ex || {};
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
-        <div class="field"><label>Phần việc *</label><input id="tk-title" value="${esc(ex.title || "")}"/></div>
-        <div class="row">
-          <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select></div>
-          <div class="field"><label>Deadline</label><input id="tk-deadline" type="date" value="${ex.deadline || ""}"/></div></div>
-        <div class="field"><label>Link tài liệu / Drive</label><input id="tk-drive" value="${esc(ex.drive_url || "")}" placeholder="https://…"/></div>
-        <div class="field"><label>Mô tả</label><textarea id="tk-desc" rows="3">${esc(ex.description || "")}</textarea></div>
-        <div class="field"><label>Trạng thái</label><select id="tk-status">
-          <option value="todo" ${ex.status !== "doing" && ex.status !== "done" ? "selected" : ""}>Chưa làm</option>
-          <option value="doing" ${ex.status === "doing" ? "selected" : ""}>Đang làm</option>
-          <option value="done" ${ex.status === "done" ? "selected" : ""}>Hoàn tất</option></select></div>`,
+        <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
+          <datalist id="tk-title-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
+        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select></div>
+        ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
       document.getElementById("tk-save").onclick = async (e) => {
         const title = document.getElementById("tk-title").value.trim();
         if (!title) return toast("Nhập phần việc", "err");
         e.target.disabled = true;
-        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, deadline: document.getElementById("tk-deadline").value || null, drive_url: document.getElementById("tk-drive").value.trim(), description: document.getElementById("tk-desc").value.trim(), status: document.getElementById("tk-status").value, updated_at: new Date().toISOString() };
+        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, updated_at: new Date().toISOString() };
+        if (!ex.id) payload.status = "todo";
         const res = ex.id ? await sb.from("biz_tasks").update(payload).eq("id", ex.id) : await sb.from("biz_tasks").insert(payload);
         if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
         toast("Đã lưu", "ok"); closeModal(); projectDetail(p);
@@ -1187,6 +1187,25 @@ async function projectDetail(p) {
     on("[data-tkdel]", "click", async (e) => {
       if (!confirm("Xoá nhiệm vụ này?")) return;
       const { error } = await sb.from("biz_tasks").delete().eq("id", e.currentTarget.dataset.tkdel);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      projectDetail(p);
+    }, body);
+    on("[data-tkapprove]", "click", async (e) => {
+      const { error } = await sb.from("biz_tasks").update({ status: "done", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.tkapprove);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã duyệt", "ok"); projectDetail(p);
+    }, body);
+    on("[data-tkrevise]", "click", async (e) => {
+      const id = e.currentTarget.dataset.tkrevise;
+      const note = prompt("Ghi chú yêu cầu chỉnh sửa (Leader sẽ thấy):", "");
+      if (note === null) return;
+      const { error } = await sb.from("biz_tasks").update({ status: "revise", admin_note: note, updated_at: new Date().toISOString() }).eq("id", id);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã gửi yêu cầu chỉnh sửa", "ok"); projectDetail(p);
+    }, body);
+    on("[data-tkreopen]", "click", async (e) => {
+      if (!confirm("Mở lại nhiệm vụ này (đưa về 'Chờ làm')?")) return;
+      const { error } = await sb.from("biz_tasks").update({ status: "todo", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.tkreopen);
       if (error) return toast("Lỗi: " + error.message, "err");
       projectDetail(p);
     }, body);
@@ -1219,19 +1238,26 @@ async function leaderTasks() {
   const { data: pays } = await sb.from("biz_expenses").select("id,note,amount,expense_date,paid,project_id,employee_name").eq("employee_name", empName).order("expense_date", { ascending: false });
   const paid = (pays || []).filter((x) => x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
   const unpaid = (pays || []).filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
-  const stx = (s) => s === "done" ? '<span class="badge green">Hoàn tất</span>' : s === "doing" ? '<span class="badge amber">Đang làm</span>' : '<span class="badge gray">Chưa làm</span>';
-  const overdue = (d, s) => d && s !== "done" && new Date(d) < new Date(new Date().toDateString());
+  const stx = (s) => s === "done" ? '<span class="badge green">Đã duyệt</span>'
+    : s === "review" ? '<span class="badge amber">Chờ duyệt</span>'
+    : s === "revise" ? '<span class="badge red">Cần sửa</span>'
+    : '<span class="badge gray">Chờ làm</span>';
   const projBlock = (g) => {
     const mineFirst = g.list.slice().sort((a, b) => (a.assignee_id === me ? -1 : 1) - (b.assignee_id === me ? -1 : 1));
-    const rows = mineFirst.map((t) => `<tr${overdue(t.deadline, t.status) ? ' style="background:rgba(220,38,38,.08)"' : ""}${t.assignee_id === me ? ' style="background:rgba(37,83,214,.06)"' : ""}>
-      <td><b>${esc(t.title)}</b>${t.description ? `<div class="meta">${esc(t.description)}</div>` : ""}${t.drive_url ? `<div class="meta"><a target="_blank" rel="noopener" href="${esc(t.drive_url)}">📁 Tài liệu</a></div>` : ""}</td>
-      <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${t.assignee_id === me ? ' <span class="badge blue">Tôi</span>' : ""}</td>
-      <td>${t.deadline ? fmtDate(t.deadline) : "—"}${overdue(t.deadline, t.status) ? ' <span class="badge red">Quá hạn</span>' : ""}</td>
-      <td>${stx(t.status)}</td></tr>`).join("");
+    const rows = mineFirst.map((t) => {
+      const mine = t.assignee_id === me;
+      const noteHTML = t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : "";
+      const actionHTML = mine && (t.status === "todo" || t.status === "revise") ? `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>` : mine && t.status === "review" ? `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>` : "";
+      return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
+        <td><b>${esc(t.title)}</b>${noteHTML}</td>
+        <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
+        <td>${stx(t.status)}</td>
+        <td style="white-space:nowrap">${actionHTML}</td></tr>`;
+    }).join("");
     return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(g.p.name)}</b>
         ${g.p.drive_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Thư mục dự án</a>` : ""}</div>
-      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Deadline</th><th>Trạng thái</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   };
   const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   document.getElementById("mt-body").innerHTML = `
@@ -1243,6 +1269,16 @@ async function leaderTasks() {
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(unpaid)}</div></div></div>
     <div class="table-wrap"><table><thead><tr><th>Nội dung / Dự án</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th></tr></thead>
     <tbody>${payRows || `<tr><td colspan="4" class="empty">Chưa có khoản lương.</td></tr>`}</tbody></table></div>`;
+  on("[data-mtdone]", "click", async (e) => {
+    const { error } = await sb.from("biz_tasks").update({ status: "review", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.mtdone);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã gửi Admin duyệt", "ok"); leaderTasks();
+  });
+  on("[data-mtundone]", "click", async (e) => {
+    const { error } = await sb.from("biz_tasks").update({ status: "todo", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.mtundone);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    leaderTasks();
+  });
 }
 
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
