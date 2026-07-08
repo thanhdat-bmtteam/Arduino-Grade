@@ -451,7 +451,8 @@ function routeDefault() {
   const r = state.profile.role;
   if (r === "admin") go("admin-dash");
   else if (r === "teacher") go("teacher-classes");
-  else if (r === "leader" || r === "accountant") go("biz-home");
+  else if (r === "leader") go("my-tasks");
+  else if (r === "accountant") go("biz-home");
   else go("student-classes");
 }
 // ================= QUẢN LÝ (native) — chỉ admin/leader/accountant =================
@@ -999,6 +1000,7 @@ async function bizProjects() {
         <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
         <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;margin-top:10px">
+          ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Drive</a>` : ""}
           <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
           <button class="btn ghost sm" data-pjed="${p.id}">Sửa</button>
@@ -1031,6 +1033,8 @@ function openProjectModal(ex) {
   showModal(ex.id ? "Sửa dự án" : "Tạo dự án", `
     <div class="field"><label>Tên dự án *</label><input id="pj-name" value="${esc(ex.name || "")}"/></div>
     <div class="field"><label>Báo giá (đ)</label><input id="pj-quote" type="number" value="${ex.quote ?? 0}"/></div>
+    <div class="field"><label>Thư mục Drive (link)</label><input id="pj-drive" value="${esc(ex.drive_url || "")}" placeholder="https://drive.google.com/drive/folders/…"/>
+      <div class="help">Chỉ Admin & Leader thấy nút mở. Nhớ share thư mục cho những người cần truy cập trước.</div></div>
     <div class="field"><label>Ghi chú</label><input id="pj-note" value="${esc(ex.note || "")}"/></div>
     <div class="help">Mẹo: đặt tên dự án trùng với ô "Dự án" trên hoá đơn để tự cộng vào phần Thu.</div>`,
     `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="pj-save">Lưu</button>`);
@@ -1038,7 +1042,7 @@ function openProjectModal(ex) {
     const name = document.getElementById("pj-name").value.trim();
     if (!name) return toast("Nhập tên dự án", "err");
     e.target.disabled = true;
-    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim() };
+    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim(), drive_url: document.getElementById("pj-drive").value.trim() };
     const res = ex.id ? await sb.from("biz_projects").update(payload).eq("id", ex.id) : await sb.from("biz_projects").insert(payload);
     if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
     toast("Đã lưu", "ok"); closeModal(); bizProjects();
@@ -1066,7 +1070,8 @@ async function projectDetail(p) {
   const invRows = (invoices || []).map((iv) => `<tr><td>${esc(iv.customer || "")}</td><td>${fmtDate(iv.invoice_date)}</td><td style="text-align:right">${fmtVND(iv.total)}</td></tr>`).join("");
   const expRows = (expenses || []).map((x) => `<tr><td>${esc(x.note || "")}${x.employee_name ? ` — <b>${esc(x.employee_name)}</b>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa</span>'}</td><td><button class="btn danger sm" data-expdel="${x.id}">✕</button></td></tr>`).join("");
   body.innerHTML = `
-    <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button></div>
+    <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button>
+      ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn secondary sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở thư mục Drive</a>` : ""}</div>
     <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công ${fmtVND(expSum)}) · LN: <b style="color:${thu - chi < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(thu - chi)}</b></div>
 
     <h3 style="font-size:14px;margin:14px 0 4px">Thu — khoản nhận từ khách</h3>
@@ -1130,6 +1135,114 @@ async function projectDetail(p) {
     if (error) return toast("Lỗi: " + error.message, "err");
     projectDetail(p);
   }, body);
+
+  // ===== Nhiệm vụ (task) — Admin quản lý, Leader chỉ xem =====
+  const isAdmin = state.profile.role === "admin";
+  const [{ data: tasks }, { data: leaders }] = await Promise.all([
+    sb.from("biz_tasks").select("*").eq("project_id", p.id).order("deadline", { ascending: true, nullsFirst: false }),
+    sb.from("profiles").select("id,full_name").eq("role", "leader").order("full_name"),
+  ]);
+  const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
+  const stx = (s) => s === "done" ? '<span class="badge green">Hoàn tất</span>' : s === "doing" ? '<span class="badge amber">Đang làm</span>' : '<span class="badge gray">Chưa làm</span>';
+  const overdue = (d, s) => d && s !== "done" && new Date(d) < new Date(new Date().toDateString());
+  const trows = (tasks || []).map((t) => `<tr${overdue(t.deadline, t.status) ? ' style="background:rgba(220,38,38,.08)"' : ""}>
+    <td><b>${esc(t.title)}</b>${t.description ? `<div class="meta">${esc(t.description)}</div>` : ""}${t.drive_url ? `<div class="meta"><a target="_blank" rel="noopener" href="${esc(t.drive_url)}">📁 Tài liệu</a></div>` : ""}</td>
+    <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}</td>
+    <td>${t.deadline ? fmtDate(t.deadline) : "—"}${overdue(t.deadline, t.status) ? ' <span class="badge red">Quá hạn</span>' : ""}</td>
+    <td>${stx(t.status)}</td>
+    ${isAdmin ? `<td style="white-space:nowrap"><button class="btn ghost sm" data-tked="${t.id}">Sửa</button><button class="btn danger sm" data-tkdel="${t.id}">✕</button></td>` : ""}</tr>`).join("");
+  body.insertAdjacentHTML("beforeend", `
+    <h3 style="font-size:14px;margin:16px 0 4px">Phân công nhiệm vụ</h3>
+    ${isAdmin ? `<div class="pill-row" style="margin-bottom:6px"><button class="btn sm" id="tk-new">＋ Thêm nhiệm vụ</button></div>` : `<p class="meta">Chỉ Admin được sửa. Nhóm Leader xem chung.</p>`}
+    <div class="table-wrap"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Deadline</th><th>Trạng thái</th>${isAdmin ? "<th></th>" : ""}</tr></thead>
+    <tbody id="tk-body">${trows || `<tr><td colspan="${isAdmin ? 5 : 4}" class="empty">Chưa có phần việc nào.</td></tr>`}</tbody></table></div>`);
+  if (isAdmin) {
+    const openTaskModal = (ex) => {
+      ex = ex || {};
+      showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
+        <div class="field"><label>Phần việc *</label><input id="tk-title" value="${esc(ex.title || "")}"/></div>
+        <div class="row">
+          <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select></div>
+          <div class="field"><label>Deadline</label><input id="tk-deadline" type="date" value="${ex.deadline || ""}"/></div></div>
+        <div class="field"><label>Link tài liệu / Drive</label><input id="tk-drive" value="${esc(ex.drive_url || "")}" placeholder="https://…"/></div>
+        <div class="field"><label>Mô tả</label><textarea id="tk-desc" rows="3">${esc(ex.description || "")}</textarea></div>
+        <div class="field"><label>Trạng thái</label><select id="tk-status">
+          <option value="todo" ${ex.status !== "doing" && ex.status !== "done" ? "selected" : ""}>Chưa làm</option>
+          <option value="doing" ${ex.status === "doing" ? "selected" : ""}>Đang làm</option>
+          <option value="done" ${ex.status === "done" ? "selected" : ""}>Hoàn tất</option></select></div>`,
+        `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
+      document.getElementById("tk-save").onclick = async (e) => {
+        const title = document.getElementById("tk-title").value.trim();
+        if (!title) return toast("Nhập phần việc", "err");
+        e.target.disabled = true;
+        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, deadline: document.getElementById("tk-deadline").value || null, drive_url: document.getElementById("tk-drive").value.trim(), description: document.getElementById("tk-desc").value.trim(), status: document.getElementById("tk-status").value, updated_at: new Date().toISOString() };
+        const res = ex.id ? await sb.from("biz_tasks").update(payload).eq("id", ex.id) : await sb.from("biz_tasks").insert(payload);
+        if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
+        toast("Đã lưu", "ok"); closeModal(); projectDetail(p);
+      };
+    };
+    const tkMap = {}; (tasks || []).forEach((t) => tkMap[t.id] = t);
+    document.getElementById("tk-new").onclick = () => openTaskModal();
+    on("[data-tked]", "click", (e) => openTaskModal(tkMap[e.currentTarget.dataset.tked]), body);
+    on("[data-tkdel]", "click", async (e) => {
+      if (!confirm("Xoá nhiệm vụ này?")) return;
+      const { error } = await sb.from("biz_tasks").delete().eq("id", e.currentTarget.dataset.tkdel);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      projectDetail(p);
+    }, body);
+  }
+}
+
+/* ---------- View riêng của Leader ---------- */
+async function leaderTasks() {
+  const r = state.profile.role;
+  if (r !== "leader" && r !== "admin") { routeDefault(); return; }
+  setContent(`<div class="section-title"><h2>Nhiệm vụ của tôi</h2></div><div id="mt-body">${loadingHTML()}</div>`);
+  const me = state.profile.id;
+  const [{ data: tasks }, { data: leaders }, { data: projects }] = await Promise.all([
+    sb.from("biz_tasks").select("*").order("deadline", { ascending: true, nullsFirst: false }),
+    sb.from("profiles").select("id,full_name").eq("role", "leader"),
+    sb.from("biz_projects").select("id,name,drive_url"),
+  ]);
+  const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
+  const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
+  // các dự án MÌNH có tham gia
+  const myProjIds = new Set((tasks || []).filter((t) => t.assignee_id === me).map((t) => t.project_id));
+  const groups = [...myProjIds].map((pid) => ({ p: projById[pid], list: (tasks || []).filter((t) => t.project_id === pid) })).filter((g) => g.p);
+  // Lương của mình: khoản chi có employee_name = tên Leader (khớp theo profiles.biz_employee_id → biz_employees.name; nếu chưa liên kết thì so tên đầy đủ)
+  let empName = null;
+  if (state.profile.biz_employee_id) {
+    const { data: emp } = await sb.from("biz_employees").select("name").eq("id", state.profile.biz_employee_id).maybeSingle();
+    empName = emp && emp.name;
+  }
+  if (!empName) empName = state.profile.full_name || "";
+  const { data: pays } = await sb.from("biz_expenses").select("id,note,amount,expense_date,paid,project_id,employee_name").eq("employee_name", empName).order("expense_date", { ascending: false });
+  const paid = (pays || []).filter((x) => x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const unpaid = (pays || []).filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const stx = (s) => s === "done" ? '<span class="badge green">Hoàn tất</span>' : s === "doing" ? '<span class="badge amber">Đang làm</span>' : '<span class="badge gray">Chưa làm</span>';
+  const overdue = (d, s) => d && s !== "done" && new Date(d) < new Date(new Date().toDateString());
+  const projBlock = (g) => {
+    const mineFirst = g.list.slice().sort((a, b) => (a.assignee_id === me ? -1 : 1) - (b.assignee_id === me ? -1 : 1));
+    const rows = mineFirst.map((t) => `<tr${overdue(t.deadline, t.status) ? ' style="background:rgba(220,38,38,.08)"' : ""}${t.assignee_id === me ? ' style="background:rgba(37,83,214,.06)"' : ""}>
+      <td><b>${esc(t.title)}</b>${t.description ? `<div class="meta">${esc(t.description)}</div>` : ""}${t.drive_url ? `<div class="meta"><a target="_blank" rel="noopener" href="${esc(t.drive_url)}">📁 Tài liệu</a></div>` : ""}</td>
+      <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${t.assignee_id === me ? ' <span class="badge blue">Tôi</span>' : ""}</td>
+      <td>${t.deadline ? fmtDate(t.deadline) : "—"}${overdue(t.deadline, t.status) ? ' <span class="badge red">Quá hạn</span>' : ""}</td>
+      <td>${stx(t.status)}</td></tr>`).join("");
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <b>${esc(g.p.name)}</b>
+        ${g.p.drive_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Thư mục dự án</a>` : ""}</div>
+      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Deadline</th><th>Trạng thái</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  };
+  const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
+  document.getElementById("mt-body").innerHTML = `
+    ${groups.length ? groups.map(projBlock).join("") : `<div class="empty"><div class="em">📋</div><p>Bạn chưa được giao phần việc nào.</p></div>`}
+    <h3 style="font-size:14px;margin:18px 0 6px">Lương của tôi</h3>
+    <p class="meta">Tính theo tên: <b>${esc(empName || "")}</b>${state.profile.biz_employee_id ? "" : " <span class=\"badge amber\">chưa liên kết Nhân viên</span>"}</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px">
+      <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Đã chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--green)">${fmtVND(paid)}</div></div>
+      <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(unpaid)}</div></div></div>
+    <div class="table-wrap"><table><thead><tr><th>Nội dung / Dự án</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th></tr></thead>
+    <tbody>${payRows || `<tr><td colspan="4" class="empty">Chưa có khoản lương.</td></tr>`}</tbody></table></div>`;
 }
 
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
@@ -1638,6 +1751,7 @@ function render() {
     "teacher-classes": teacherClasses, "class": classView,
     "student-classes": studentClasses, "student-absence": studentAbsence, "student-grades": studentGrades,
     "biz-home": bizHome,
+    "my-tasks": leaderTasks,
   };
   const fn = map[v];
   if (!fn) return routeDefault();
@@ -1801,7 +1915,8 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký học", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
-  if (r === "leader" || r === "accountant") return [["biz-home", "Quản lý", "💼"]];
+  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["biz-home", "Quản lý", "💼"]];
+  if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
   return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
 }
@@ -1916,18 +2031,26 @@ async function adminUsers() {
     toast("Đã khoá tài khoản", "ok"); adminUsers();
   });
 }
-function openCreateUser() {
+async function openCreateUser() {
   const ROLE_DOMAIN = { admin: "admin.bmt", leader: "leader.bmt", accountant: "ketoan.bmt", teacher: "teacher.bmt", student: STUDENT_DOMAIN };
+  const { data: emps } = await sb.from("biz_employees").select("id,name").order("name");
+  const empOptions = (emps || []).map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
   showModal("Tạo tài khoản", `
     <div class="field"><label>Vai trò</label>
       <select id="cu-role"><option value="student">Học sinh</option><option value="teacher">Giáo viên</option><option value="leader">Leader</option><option value="accountant">Kế toán</option><option value="admin">Admin</option></select></div>
     <div class="field"><label>Họ và tên</label><input id="cu-name" /></div>
+    <div class="field" id="cu-emp-wrap" style="display:none"><label>Liên kết Nhân viên (để tính lương)</label>
+      <select id="cu-emp"><option value="">— Chưa liên kết —</option>${empOptions}</select>
+      <div class="help">Chọn bản ghi Nhân viên tương ứng để Leader xem đúng lương của mình. Có thể để trống rồi cập nhật sau ở Supabase.</div></div>
     <div class="field"><label>Email *</label><input id="cu-email" type="email" /><div class="help">Gợi ý theo vai trò: <code id="cu-hint"></code>. Bấm <b>Tự sinh</b> để lấy nhanh.
       <button class="btn ghost sm" id="cu-gen" type="button" style="margin-left:6px">Tự sinh</button></div></div>
     <div class="field"><label>Mật khẩu * (≥ 6 ký tự)</label><input id="cu-pass" value="${Math.random().toString(36).slice(2, 10)}" /></div>
     <p class="help">Cần TẮT "Confirm email" trong Supabase để tài khoản dùng được ngay. Hãy gửi email + mật khẩu cho người dùng.</p>`,
     `<button class="btn secondary" id="cu-cancel">Huỷ</button><button class="btn" id="cu-save">Tạo</button>`);
   const roleEl = document.getElementById("cu-role"), nameEl = document.getElementById("cu-name"), emailEl = document.getElementById("cu-email"), hintEl = document.getElementById("cu-hint");
+  const empWrap = document.getElementById("cu-emp-wrap");
+  const toggleEmp = () => { empWrap.style.display = roleEl.value === "leader" ? "" : "none"; };
+  toggleEmp();
   const suggest = () => {
     const d = ROLE_DOMAIN[roleEl.value] || "bmt.local";
     const local = studentLocalPart(nameEl.value.trim()) || "user";
@@ -1935,7 +2058,7 @@ function openCreateUser() {
     return local + "@" + d;
   };
   const autofill = () => { emailEl.value = suggest(); };
-  roleEl.onchange = () => { suggest(); if (!emailEl.dataset.touched) autofill(); };
+  roleEl.onchange = () => { toggleEmp(); suggest(); if (!emailEl.dataset.touched) autofill(); };
   nameEl.oninput = () => { suggest(); if (!emailEl.dataset.touched) autofill(); };
   emailEl.oninput = () => { emailEl.dataset.touched = "1"; };
   document.getElementById("cu-gen").onclick = () => { autofill(); emailEl.dataset.touched = ""; };
@@ -1946,10 +2069,12 @@ function openCreateUser() {
     const name = nameEl.value.trim();
     const email = emailEl.value.trim() || suggest();
     const pass = document.getElementById("cu-pass").value;
+    const empId = role === "leader" ? (document.getElementById("cu-emp").value || null) : null;
     if (!email || pass.length < 6) return toast("Email hợp lệ & mật khẩu ≥ 6 ký tự", "err");
     e.target.disabled = true; e.target.textContent = "Đang tạo...";
     try {
-      await adminCreateUser(email, pass, name, role);
+      const u = await adminCreateUser(email, pass, name, role);
+      if (empId && u && u.id) await sb.from("profiles").update({ biz_employee_id: empId }).eq("id", u.id);
       showCredentials({ name, email, pass, role });
     } catch (err) {
       const msg = (err && (err.message || err.error_description || err.error || (typeof err === "string" ? err : ""))) || (() => { try { return JSON.stringify(err); } catch (e) { return String(err); } })();
