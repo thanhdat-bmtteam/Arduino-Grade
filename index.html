@@ -1218,6 +1218,8 @@ async function leaderTasks() {
   if (r !== "leader" && r !== "admin") { routeDefault(); return; }
   setContent(`<div class="section-title"><h2>Nhiệm vụ của tôi</h2></div><div id="mt-body">${loadingHTML()}</div>`);
   const me = state.profile.id;
+  const norm = (x) => String(x || "").trim().toLowerCase();
+  const isMine = (t) => norm(t.assignee_id) === norm(me);
   const [{ data: tasks }, { data: leaders }, { data: projects }] = await Promise.all([
     sb.from("biz_tasks").select("*").order("deadline", { ascending: true, nullsFirst: false }),
     sb.from("profiles").select("id,full_name").eq("role", "leader"),
@@ -1226,8 +1228,8 @@ async function leaderTasks() {
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
   const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
   // các dự án MÌNH có tham gia
-  const myProjIds = new Set((tasks || []).filter((t) => t.assignee_id === me).map((t) => t.project_id));
-  console.log("[my-tasks] me=", me, "tổng task đọc được=", (tasks || []).length, "task giao cho tôi=", (tasks || []).filter((t) => t.assignee_id === me).length);
+  const myProjIds = new Set((tasks || []).filter(isMine).map((t) => t.project_id));
+  console.log("[my-tasks] me=", me, "tổng task đọc được=", (tasks || []).length, "task giao cho tôi=", (tasks || []).filter(isMine).length);
   const groups = [...myProjIds].map((pid) => ({ p: projById[pid], list: (tasks || []).filter((t) => t.project_id === pid) })).filter((g) => g.p);
   // Lương của mình: khoản chi có employee_name = tên Leader (khớp theo profiles.biz_employee_id → biz_employees.name; nếu chưa liên kết thì so tên đầy đủ)
   let empName = null;
@@ -1244,9 +1246,9 @@ async function leaderTasks() {
     : s === "revise" ? '<span class="badge red">Cần sửa</span>'
     : '<span class="badge gray">Chờ làm</span>';
   const projBlock = (g) => {
-    const mineFirst = g.list.slice().sort((a, b) => (a.assignee_id === me ? -1 : 1) - (b.assignee_id === me ? -1 : 1));
+    const mineFirst = g.list.slice().sort((a, b) => (isMine(a) ? -1 : 1) - (isMine(b) ? -1 : 1));
     const rows = mineFirst.map((t) => {
-      const mine = t.assignee_id === me;
+      const mine = isMine(t);
       const noteHTML = t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : "";
       const actionHTML = mine && (t.status === "todo" || t.status === "revise") ? `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>` : mine && t.status === "review" ? `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>` : "";
       return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
