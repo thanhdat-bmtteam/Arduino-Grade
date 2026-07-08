@@ -484,7 +484,7 @@ function bizSoon(name) { bcontent().innerHTML = `<div class="empty"><div class="
 
 function bizHome() {
   const r = state.profile.role;
-  if (!["admin", "leader", "accountant"].includes(r)) { routeDefault(); return; }
+  if (!["admin", "accountant"].includes(r)) { routeDefault(); return; }
   const tab = state.params.btab || "invoices";
   const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["stock", "Kho"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
   setContent(`
@@ -1140,7 +1140,7 @@ async function projectDetail(p) {
   const isAdmin = state.profile.role === "admin";
   const [{ data: tasks }, { data: leaders }] = await Promise.all([
     sb.from("biz_tasks").select("*").eq("project_id", p.id).order("created_at", { ascending: true }),
-    sb.from("profiles").select("id,full_name").eq("role", "leader").order("full_name"),
+    sb.from("profiles").select("id,full_name,email").eq("role", "leader").order("full_name"),
   ]);
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
   const stx = (s) => s === "done" ? '<span class="badge green">Đã duyệt</span>'
@@ -1167,7 +1167,7 @@ async function projectDetail(p) {
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
-        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select></div>
+        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
         ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
       document.getElementById("tk-save").onclick = async (e) => {
@@ -1227,6 +1227,7 @@ async function leaderTasks() {
   const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
   // các dự án MÌNH có tham gia
   const myProjIds = new Set((tasks || []).filter((t) => t.assignee_id === me).map((t) => t.project_id));
+  console.log("[my-tasks] me=", me, "tổng task đọc được=", (tasks || []).length, "task giao cho tôi=", (tasks || []).filter((t) => t.assignee_id === me).length);
   const groups = [...myProjIds].map((pid) => ({ p: projById[pid], list: (tasks || []).filter((t) => t.project_id === pid) })).filter((g) => g.p);
   // Lương của mình: khoản chi có employee_name = tên Leader (khớp theo profiles.biz_employee_id → biz_employees.name; nếu chưa liên kết thì so tên đầy đủ)
   let empName = null;
@@ -1261,7 +1262,7 @@ async function leaderTasks() {
   };
   const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   document.getElementById("mt-body").innerHTML = `
-    ${groups.length ? groups.map(projBlock).join("") : `<div class="empty"><div class="em">📋</div><p>Bạn chưa được giao phần việc nào.</p></div>`}
+    ${groups.length ? groups.map(projBlock).join("") : `<div class="empty"><div class="em">📋</div><p>Bạn chưa được giao phần việc nào.</p><p class="meta">ID của bạn: <code>${esc(me)}</code>${(tasks || []).length ? ` · đọc được ${(tasks || []).length} task nhưng không có task nào gắn ID này.` : " · không đọc được task nào (RLS?)."}</p></div>`}
     <h3 style="font-size:14px;margin:18px 0 6px">Lương của tôi</h3>
     <p class="meta">Tính theo tên: <b>${esc(empName || "")}</b>${state.profile.biz_employee_id ? "" : " <span class=\"badge amber\">chưa liên kết Nhân viên</span>"}</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px">
@@ -1951,7 +1952,7 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký học", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
-  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["biz-home", "Quản lý", "💼"]];
+  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"]];
   if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
   return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
