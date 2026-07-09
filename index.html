@@ -1255,12 +1255,17 @@ async function leaderTasks() {
         <td><b>${esc(t.title)}</b>${noteHTML}</td>
         <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
         <td>${stx(t.status)}</td>
-        <td style="white-space:nowrap">${actionHTML}</td></tr>`;
+        <td style="text-align:right;white-space:nowrap">${actionHTML}</td></tr>`;
     }).join("");
     return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(g.p.name)}</b>
-        ${g.p.drive_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Thư mục dự án</a>` : ""}</div>
-      <div class="table-wrap" style="margin-top:8px"><table><thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+        ${g.p.drive_url
+          ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Mở Drive để nộp file</a>`
+          : `<span class="meta" style="color:var(--muted)">Chưa có link Drive dự án — báo Admin dán link để nộp file.</span>`}</div>
+      <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
+        <colgroup><col style="width:36%"><col style="width:26%"><col style="width:18%"><col style="width:20%"></colgroup>
+        <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
   };
   const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   document.getElementById("mt-body").innerHTML = `
