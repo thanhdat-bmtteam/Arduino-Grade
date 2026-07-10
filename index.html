@@ -1148,7 +1148,7 @@ async function projectDetail(p) {
     : s === "revise" ? '<span class="badge red">Cần sửa</span>'
     : '<span class="badge gray">Chờ làm</span>';
   const trows = (tasks || []).map((t) => `<tr>
-    <td><b>${esc(t.title)}</b>${t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : ""}</td>
+    <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : ""}</td>
     <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}</td>
     <td>${stx(t.status)}</td>
     <td style="white-space:nowrap">
@@ -1167,14 +1167,21 @@ async function projectDetail(p) {
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
+        <div class="field" id="tk-amt-wrap" style="display:none"><label>Giá tiền (đ)</label><input id="tk-amount" type="number" value="${ex.amount || 0}"/>
+          <div class="help">Chỉ áp dụng khi "Phần việc" là <b>Báo giá</b>. Nhập giá báo cho khách trong dự án này.</div></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
         ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
+      const titleEl = document.getElementById("tk-title"), amtWrap = document.getElementById("tk-amt-wrap");
+      const toggleAmt = () => { amtWrap.style.display = titleEl.value.trim() === "Báo giá" ? "" : "none"; };
+      titleEl.addEventListener("input", toggleAmt);
+      titleEl.addEventListener("change", toggleAmt);
+      toggleAmt();
       document.getElementById("tk-save").onclick = async (e) => {
-        const title = document.getElementById("tk-title").value.trim();
+        const title = titleEl.value.trim();
         if (!title) return toast("Nhập phần việc", "err");
         e.target.disabled = true;
-        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, updated_at: new Date().toISOString() };
+        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, amount: title === "Báo giá" ? (Number(document.getElementById("tk-amount").value) || 0) : 0, updated_at: new Date().toISOString() };
         if (!ex.id) payload.status = "todo";
         const res = ex.id ? await sb.from("biz_tasks").update(payload).eq("id", ex.id) : await sb.from("biz_tasks").insert(payload);
         if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
@@ -1252,7 +1259,7 @@ async function leaderTasks() {
       const noteHTML = t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : "";
       const actionHTML = mine && (t.status === "todo" || t.status === "revise") ? `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>` : mine && t.status === "review" ? `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>` : "";
       return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
-        <td><b>${esc(t.title)}</b>${noteHTML}</td>
+        <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${noteHTML}</td>
         <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
         <td>${stx(t.status)}</td>
         <td style="text-align:right;white-space:nowrap">${actionHTML}</td></tr>`;
