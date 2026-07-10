@@ -487,12 +487,55 @@ function bizHome() {
   if (!["admin", "accountant"].includes(r)) { routeDefault(); return; }
   const tab = state.params.btab || "invoices";
   const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["stock", "Kho"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
+  if (r === "admin") tabs.push(["notify", "Thông báo"]);
   setContent(`
     <div class="section-title"><h2>Quản lý</h2></div>
-    <div class="tabbar">${tabs.map(([k, l]) => `<button data-btab="${k}" class="${tab === k ? "active" : ""}">${esc(l)}</button>`).join("")}</div>
+    <div class="tabbar">${tabs.map(([k, l]) => `<button data-btab="${k}" class="${tab === k ? "active" : ""}">${esc(l)}${k === "notify" ? ' <span id="notify-badge"></span>' : ""}</button>`).join("")}</div>
     <div id="bcontent">${loadingHTML()}</div>`);
   on("[data-btab]", "click", (e) => go("biz-home", { btab: e.currentTarget.dataset.btab }), content());
-  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees }[tab] || bizInvoices)();
+  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees, notify: bizNotify }[tab] || bizInvoices)();
+  if (r === "admin") (async () => {
+    const { count } = await sb.from("biz_tasks").select("id", { count: "exact", head: true }).eq("status", "review");
+    const el = document.getElementById("notify-badge");
+    if (el && count > 0) el.innerHTML = `<span class="badge red" style="margin-left:2px">${count}</span>`;
+  })();
+}
+
+/* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt ---------- */
+async function bizNotify() {
+  bcontent().innerHTML = loadingHTML();
+  const [{ data: tasks, error }, { data: leaders }, { data: projects }] = await Promise.all([
+    sb.from("biz_tasks").select("*").eq("status", "review").order("updated_at", { ascending: false }),
+    sb.from("profiles").select("id,full_name").eq("role", "leader"),
+    sb.from("biz_projects").select("id,name"),
+  ]);
+  if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải thông báo: ${esc(error.message)}</div>`; return; }
+  const leaderById = {}; (leaders || []).forEach((l) => leaderById[(l.id || "").toLowerCase()] = l.full_name);
+  const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
+  const list = tasks || [];
+  if (!list.length) { bcontent().innerHTML = `<div class="empty"><div class="em">🔔</div><p>Không có phần việc nào đang chờ duyệt.</p></div>`; return; }
+  const rows = list.map((t) => `<div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+      <div style="min-width:0">
+        <div><b>${esc(leaderById[(t.assignee_id || "").toLowerCase()] || "(không rõ)")}</b> đã hoàn tất <b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}</div>
+        <div class="meta">Dự án: ${esc(projById[t.project_id] ? projById[t.project_id].name : "(đã xoá)")} · ${fmtDT(t.updated_at)}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn success sm" data-ntapprove="${t.id}">✓ Duyệt</button>
+        <button class="btn danger sm" data-ntrevise="${t.id}">Yêu cầu sửa</button>
+      </div></div>`).join("");
+  bcontent().innerHTML = `<p class="meta" style="margin:0 0 10px">Có <b>${list.length}</b> phần việc chờ duyệt. Duyệt hoặc yêu cầu sửa xong thì thông báo tự ẩn.</p>${rows}`;
+  on("[data-ntapprove]", "click", async (e) => {
+    const { error } = await sb.from("biz_tasks").update({ status: "done", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.ntapprove);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã duyệt", "ok"); bizHome();
+  }, bcontent());
+  on("[data-ntrevise]", "click", async (e) => {
+    const note = prompt("Ghi chú yêu cầu chỉnh sửa (Leader sẽ thấy):", "");
+    if (note === null) return;
+    const { error } = await sb.from("biz_tasks").update({ status: "revise", admin_note: note, updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.ntrevise);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã gửi yêu cầu chỉnh sửa", "ok"); bizHome();
+  }, bcontent());
 }
 
 /* ---------- Bảng giá ---------- */
