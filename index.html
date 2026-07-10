@@ -1260,7 +1260,7 @@ async function leaderTasks() {
       let actionHTML = "";
       if (mine && (t.status === "todo" || t.status === "revise")) {
         actionHTML = isBaoGia
-          ? `<div style="display:flex;gap:4px;align-items:center;justify-content:flex-end"><input class="mt-bg-amt" data-tid="${t.id}" type="number" value="${Number(t.amount) || ""}" placeholder="Giá tiền" style="width:120px;text-align:right"/><button class="btn success sm" data-mtsubmit="${t.id}">Gửi báo giá</button></div>`
+          ? `<div style="display:inline-flex;gap:4px;align-items:center;justify-content:flex-end"><input class="mt-bg-amt" data-tid="${t.id}" type="number" value="${Number(t.amount) || ""}" placeholder="đ" style="width:88px;padding:6px 8px;text-align:right;font-size:12px"/><button class="btn success sm" data-mtsubmit="${t.id}" style="padding:6px 10px">Gửi</button></div>`
           : `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>`;
       } else if (mine && t.status === "review") {
         actionHTML = `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>`;
@@ -1277,7 +1277,7 @@ async function leaderTasks() {
           ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Mở Drive để nộp file</a>`
           : `<span class="meta" style="color:var(--muted)">Chưa có link Drive dự án — báo Admin dán link để nộp file.</span>`}</div>
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:36%"><col style="width:26%"><col style="width:18%"><col style="width:20%"></colgroup>
+        <colgroup><col style="width:30%"><col style="width:24%"><col style="width:16%"><col style="width:30%"></colgroup>
         <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
         <tbody>${rows}</tbody></table></div></div>`;
   };
