@@ -1167,21 +1167,20 @@ async function projectDetail(p) {
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
-        <div class="field" id="tk-amt-wrap" style="display:none"><label>Giá tiền (đ)</label><input id="tk-amount" type="number" value="${ex.amount || 0}"/>
-          <div class="help">Chỉ áp dụng khi "Phần việc" là <b>Báo giá</b>. Nhập giá báo cho khách trong dự án này.</div></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
+        <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
         ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
-      const titleEl = document.getElementById("tk-title"), amtWrap = document.getElementById("tk-amt-wrap");
-      const toggleAmt = () => { amtWrap.style.display = titleEl.value.trim() === "Báo giá" ? "" : "none"; };
-      titleEl.addEventListener("input", toggleAmt);
-      titleEl.addEventListener("change", toggleAmt);
-      toggleAmt();
+      const titleEl = document.getElementById("tk-title");
+      const toggleNote = () => { document.getElementById("tk-note-bg").style.display = titleEl.value.trim() === "Báo giá" ? "" : "none"; };
+      titleEl.addEventListener("input", toggleNote);
+      titleEl.addEventListener("change", toggleNote);
+      toggleNote();
       document.getElementById("tk-save").onclick = async (e) => {
         const title = titleEl.value.trim();
         if (!title) return toast("Nhập phần việc", "err");
         e.target.disabled = true;
-        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, amount: title === "Báo giá" ? (Number(document.getElementById("tk-amount").value) || 0) : 0, updated_at: new Date().toISOString() };
+        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, updated_at: new Date().toISOString() };
         if (!ex.id) payload.status = "todo";
         const res = ex.id ? await sb.from("biz_tasks").update(payload).eq("id", ex.id) : await sb.from("biz_tasks").insert(payload);
         if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
@@ -1257,7 +1256,15 @@ async function leaderTasks() {
     const rows = mineFirst.map((t) => {
       const mine = isMine(t);
       const noteHTML = t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : "";
-      const actionHTML = mine && (t.status === "todo" || t.status === "revise") ? `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>` : mine && t.status === "review" ? `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>` : "";
+      const isBaoGia = t.title === "Báo giá";
+      let actionHTML = "";
+      if (mine && (t.status === "todo" || t.status === "revise")) {
+        actionHTML = isBaoGia
+          ? `<div style="display:flex;gap:4px;align-items:center;justify-content:flex-end"><input class="mt-bg-amt" data-tid="${t.id}" type="number" value="${Number(t.amount) || ""}" placeholder="Giá tiền" style="width:120px;text-align:right"/><button class="btn success sm" data-mtsubmit="${t.id}">Gửi báo giá</button></div>`
+          : `<button class="btn success sm" data-mtdone="${t.id}">✓ Đã hoàn tất</button>`;
+      } else if (mine && t.status === "review") {
+        actionHTML = `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>`;
+      }
       return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
         <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${noteHTML}</td>
         <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
@@ -1288,6 +1295,15 @@ async function leaderTasks() {
     const { error } = await sb.from("biz_tasks").update({ status: "review", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.mtdone);
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã gửi Admin duyệt", "ok"); leaderTasks();
+  });
+  on("[data-mtsubmit]", "click", async (e) => {
+    const id = e.currentTarget.dataset.mtsubmit;
+    const inp = document.querySelector(`.mt-bg-amt[data-tid="${id}"]`);
+    const amt = Number(inp && inp.value) || 0;
+    if (amt <= 0) return toast("Nhập giá báo giá trước khi gửi", "err");
+    const { error } = await sb.from("biz_tasks").update({ status: "review", admin_note: "", amount: amt, updated_at: new Date().toISOString() }).eq("id", id);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã gửi báo giá cho Admin duyệt", "ok"); leaderTasks();
   });
   on("[data-mtundone]", "click", async (e) => {
     const { error } = await sb.from("biz_tasks").update({ status: "todo", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.mtundone);
