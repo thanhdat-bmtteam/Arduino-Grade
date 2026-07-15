@@ -453,6 +453,7 @@ function routeDefault() {
   else if (r === "teacher") go("teacher-classes");
   else if (r === "leader") go("my-tasks");
   else if (r === "accountant") go("biz-home");
+  else if (r === "gvhd" || r === "tg") go("my-projects");
   else go("student-classes");
 }
 // ================= QUẢN LÝ (native) — chỉ admin/leader/accountant =================
@@ -1259,6 +1260,75 @@ async function projectDetail(p) {
       projectDetail(p);
     }, body);
   }
+
+  // ===== Người xem (GVHD / Tác giả) — chỉ Admin quản lý =====
+  if (isAdmin) {
+    const [{ data: members }, { data: viewers }] = await Promise.all([
+      sb.from("biz_project_members").select("*").eq("project_id", p.id),
+      sb.from("profiles").select("id,full_name,email,role").in("role", ["gvhd", "tg"]).order("full_name"),
+    ]);
+    const memIds = new Set((members || []).map((m) => m.profile_id));
+    const vById = {}; (viewers || []).forEach((v) => vById[v.id] = v);
+    const roleTag = (ro) => ro === "gvhd" ? '<span class="badge blue">GVHD</span>' : '<span class="badge amber">Tác giả</span>';
+    const memRows = (members || []).map((m) => { const v = vById[m.profile_id]; return v ? `<span class="badge gray" style="display:inline-flex;gap:6px;align-items:center;margin:2px">${esc(v.full_name)} ${roleTag(v.role)} <a href="#" data-pmdel="${m.id}" style="color:var(--red);text-decoration:none">✕</a></span>` : ""; }).join(" ");
+    const addOptions = (viewers || []).filter((v) => !memIds.has(v.id)).map((v) => `<option value="${v.id}">${esc(v.full_name)} (${v.role === "gvhd" ? "GVHD" : "Tác giả"} — ${esc(v.email || "")})</option>`).join("");
+    body.insertAdjacentHTML("beforeend", `
+      <h3 style="font-size:14px;margin:16px 0 4px">Người xem dự án (GVHD / Tác giả)</h3>
+      <p class="meta" style="margin:0 0 6px">Họ chỉ thấy: phân công thực hiện, thư mục Drive, thông báo tiến độ. <b>Không thấy tiền.</b></p>
+      <div style="margin-bottom:6px">${memRows || '<span class="meta">Chưa thêm ai.</span>'}</div>
+      <div class="row" style="align-items:flex-end;gap:6px">
+        <div class="field" style="flex:1;margin:0"><select id="pm-pick"><option value="">— Chọn GVHD / Tác giả —</option>${addOptions}</select></div>
+        <button class="btn sm" id="pm-add" type="button">＋ Thêm</button></div>`);
+    document.getElementById("pm-add").onclick = async (e) => {
+      const pid = document.getElementById("pm-pick").value;
+      if (!pid) return toast("Chọn người cần thêm", "err");
+      const { error } = await sb.from("biz_project_members").insert({ project_id: p.id, profile_id: pid });
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã thêm người xem", "ok"); projectDetail(p);
+    };
+    on("[data-pmdel]", "click", async (e) => {
+      e.preventDefault();
+      const { error } = await sb.from("biz_project_members").delete().eq("id", e.currentTarget.dataset.pmdel);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      projectDetail(p);
+    }, body);
+  }
+
+  // ===== Thông báo tiến độ — Admin (và Leader được giao) đăng =====
+  {
+    const { data: progress } = await sb.from("biz_progress").select("*").eq("project_id", p.id).order("report_date", { ascending: false });
+    const meId = state.profile.id;
+    const pgRows = (progress || []).map((x) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">
+          <div class="meta"><b>${fmtDate(x.report_date)}</b></div>
+          ${(isAdmin || x.created_by === meId) ? `<a href="#" data-pgdel="${x.id}" style="color:var(--red);text-decoration:none">✕ Xoá</a>` : ""}</div>
+        <div style="margin:4px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
+        ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Xem đính kèm</a>` : ""}
+      </div>`).join("");
+    body.insertAdjacentHTML("beforeend", `
+      <h3 style="font-size:14px;margin:16px 0 4px">Thông báo tiến độ</h3>
+      <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
+        <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="pg-date" type="date" value="${new Date().toISOString().slice(0, 10)}"/></div>
+        <div class="field" style="flex:2;min-width:180px;margin:0"><label>Nội dung</label><input id="pg-content" placeholder="Hôm nay đã làm gì…"/></div>
+        <div class="field" style="flex:1;min-width:150px;margin:0"><label>Link ảnh/biểu đồ/tài liệu</label><input id="pg-url" placeholder="https://… (không bắt buộc)"/></div>
+        <button class="btn" id="pg-add" type="button">Đăng</button></div>
+      <div id="pg-list">${pgRows || `<p class="meta" style="margin:8px 0 0">Chưa có báo cáo tiến độ.</p>`}</div>`);
+    document.getElementById("pg-add").onclick = async (e) => {
+      const content = document.getElementById("pg-content").value.trim();
+      if (!content) return toast("Nhập nội dung", "err");
+      e.target.disabled = true;
+      const { error } = await sb.from("biz_progress").insert({ project_id: p.id, report_date: document.getElementById("pg-date").value || null, content, attach_url: document.getElementById("pg-url").value.trim(), created_by: meId });
+      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+      toast("Đã đăng tiến độ", "ok"); projectDetail(p);
+    };
+    on("[data-pgdel]", "click", async (e) => {
+      e.preventDefault();
+      if (!confirm("Xoá báo cáo này?")) return;
+      const { error } = await sb.from("biz_progress").delete().eq("id", e.currentTarget.dataset.pgdel);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      projectDetail(p);
+    }, body);
+  }
 }
 
 /* ---------- View riêng của Leader ---------- */
@@ -1274,6 +1344,7 @@ async function leaderTasks() {
     sb.from("profiles").select("id,full_name").eq("role", "leader"),
     sb.from("biz_projects").select("id,name,drive_url"),
   ]);
+  const { data: progressAll } = await sb.from("biz_progress").select("*").order("report_date", { ascending: false });
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l.full_name);
   const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
   // các dự án MÌNH có tham gia
@@ -1322,7 +1393,19 @@ async function leaderTasks() {
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
         <colgroup><col style="width:30%"><col style="width:24%"><col style="width:16%"><col style="width:30%"></colgroup>
         <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
-        <tbody>${rows}</tbody></table></div></div>`;
+        <tbody>${rows}</tbody></table></div>
+      <h3 style="font-size:13px;margin:12px 0 2px">Thông báo tiến độ</h3>
+      ${(progressAll || []).filter((x) => x.project_id === g.p.id).map((x) => `<div style="padding:8px 0;border-top:1px solid var(--line)">
+          <div style="display:flex;justify-content:space-between;gap:8px"><span class="meta"><b>${fmtDate(x.report_date)}</b></span>
+            ${x.created_by === state.profile.id ? `<a href="#" data-lpgdel="${x.id}" style="color:var(--red);text-decoration:none">✕</a>` : ""}</div>
+          <div style="margin:2px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
+          ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Đính kèm</a>` : ""}
+        </div>`).join("") || `<p class="meta" style="margin:4px 0 0">Chưa có báo cáo.</p>`}
+      <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <div class="field" style="max-width:150px;margin:0"><label>Ngày</label><input class="lpg-date" data-pid="${g.p.id}" type="date" value="${new Date().toISOString().slice(0, 10)}"/></div>
+        <div class="field" style="flex:2;min-width:160px;margin:0"><label>Nội dung</label><input class="lpg-content" data-pid="${g.p.id}" placeholder="Hôm nay đã làm gì…"/></div>
+        <div class="field" style="flex:1;min-width:140px;margin:0"><label>Link đính kèm</label><input class="lpg-url" data-pid="${g.p.id}" placeholder="https://…"/></div>
+        <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div></div>`;
   };
   const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   document.getElementById("mt-body").innerHTML = `
@@ -1353,6 +1436,67 @@ async function leaderTasks() {
     if (error) return toast("Lỗi: " + error.message, "err");
     leaderTasks();
   });
+  on("[data-lpgadd]", "click", async (e) => {
+    const pid = e.currentTarget.dataset.lpgadd;
+    const q = (cls) => document.querySelector(`.${cls}[data-pid="${pid}"]`);
+    const content = (q("lpg-content").value || "").trim();
+    if (!content) return toast("Nhập nội dung", "err");
+    e.currentTarget.disabled = true;
+    const { error } = await sb.from("biz_progress").insert({ project_id: pid, report_date: q("lpg-date").value || null, content, attach_url: (q("lpg-url").value || "").trim(), created_by: state.profile.id });
+    if (error) { toast("Lỗi: " + error.message, "err"); e.currentTarget.disabled = false; return; }
+    toast("Đã đăng tiến độ", "ok"); leaderTasks();
+  });
+  on("[data-lpgdel]", "click", async (e) => {
+    e.preventDefault();
+    if (!confirm("Xoá báo cáo này?")) return;
+    const { error } = await sb.from("biz_progress").delete().eq("id", e.currentTarget.dataset.lpgdel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    leaderTasks();
+  });
+}
+
+/* ---------- Trang GVHD / Tác giả: xem giới hạn (không thấy tiền) ---------- */
+async function guestProjects() {
+  const r = state.profile.role;
+  if (!["gvhd", "tg", "admin"].includes(r)) { routeDefault(); return; }
+  setContent(`<div class="section-title"><h2>Dự án của tôi</h2></div><div id="gp-body">${loadingHTML()}</div>`);
+  const [{ data: projs, error }, { data: tasks }, { data: leaders }, { data: progress }] = await Promise.all([
+    sb.from("v_member_projects").select("*").order("name"),
+    sb.from("v_member_tasks").select("*"),
+    sb.from("profiles").select("id,full_name").eq("role", "leader"),
+    sb.from("biz_progress").select("*").order("report_date", { ascending: false }),
+  ]);
+  const body = document.getElementById("gp-body");
+  if (error) { body.innerHTML = `<div class="empty">Lỗi tải dự án: ${esc(error.message)}</div>`; return; }
+  const list = projs || [];
+  if (!list.length) { body.innerHTML = `<div class="empty"><div class="em">📁</div><p>Bạn chưa được thêm vào dự án nào. Liên hệ Admin.</p></div>`; return; }
+  const leaderById = {}; (leaders || []).forEach((l) => leaderById[(l.id || "").toLowerCase()] = l.full_name);
+  const stx = (s) => s === "done" ? '<span class="badge green">Đã duyệt</span>'
+    : s === "review" ? '<span class="badge amber">Chờ duyệt</span>'
+    : s === "revise" ? '<span class="badge red">Đang chỉnh sửa</span>'
+    : '<span class="badge gray">Chưa làm</span>';
+  body.innerHTML = list.map((p) => {
+    const ts = (tasks || []).filter((t) => t.project_id === p.id);
+    const trows = ts.map((t) => `<tr><td>${esc(t.title)}</td><td>${esc(leaderById[(t.assignee_id || "").toLowerCase()] || "(chưa giao)")}</td><td>${stx(t.status)}</td></tr>`).join("");
+    const pg = (progress || []).filter((x) => x.project_id === p.id);
+    const pgrows = pg.map((x) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
+        <div class="meta"><b>${fmtDate(x.report_date)}</b></div>
+        <div style="margin:4px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
+        ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Xem đính kèm</a>` : ""}
+      </div>`).join("");
+    return `<div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <b>${esc(p.name)}</b>
+        ${p.drive_url ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Thư mục tài liệu (Drive)</a>` : `<span class="meta">Chưa có link Drive.</span>`}</div>
+      <h3 style="font-size:14px;margin:12px 0 4px">Phân công thực hiện</h3>
+      <div class="table-wrap"><table style="table-layout:fixed;width:100%">
+        <colgroup><col style="width:40%"><col style="width:35%"><col style="width:25%"></colgroup>
+        <thead><tr><th>Phần việc</th><th>Người thực hiện</th><th>Trạng thái</th></tr></thead>
+        <tbody>${trows || `<tr><td colspan="3" class="empty">Chưa phân công.</td></tr>`}</tbody></table></div>
+      <h3 style="font-size:14px;margin:14px 0 2px">Thông báo tiến độ</h3>
+      ${pgrows || `<p class="meta" style="margin:6px 0 0">Chưa có báo cáo tiến độ.</p>`}
+    </div>`;
+  }).join("");
 }
 
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
@@ -1862,6 +2006,7 @@ function render() {
     "student-classes": studentClasses, "student-absence": studentAbsence, "student-grades": studentGrades,
     "biz-home": bizHome,
     "my-tasks": leaderTasks,
+    "my-projects": guestProjects,
   };
   const fn = map[v];
   if (!fn) return routeDefault();
@@ -2027,6 +2172,7 @@ function navItems() {
   ];
   if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"]];
   if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
+  if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
   return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
 }
@@ -2142,12 +2288,12 @@ async function adminUsers() {
   });
 }
 async function openCreateUser() {
-  const ROLE_DOMAIN = { admin: "admin.bmt", leader: "leader.bmt", accountant: "ketoan.bmt", teacher: "teacher.bmt", student: STUDENT_DOMAIN };
+  const ROLE_DOMAIN = { admin: "admin.bmt", leader: "leader.bmt", accountant: "ketoan.bmt", teacher: "teacher.bmt", student: STUDENT_DOMAIN, gvhd: "gvhd.bmt", tg: "tg.bmt" };
   const { data: emps } = await sb.from("biz_employees").select("id,name").order("name");
   const empOptions = (emps || []).map((e) => `<option value="${e.id}">${esc(e.name)}</option>`).join("");
   showModal("Tạo tài khoản", `
     <div class="field"><label>Vai trò</label>
-      <select id="cu-role"><option value="student">Học sinh</option><option value="teacher">Giáo viên</option><option value="leader">Leader</option><option value="accountant">Kế toán</option><option value="admin">Admin</option></select></div>
+      <select id="cu-role"><option value="student">Học sinh</option><option value="teacher">Giáo viên</option><option value="leader">Leader</option><option value="accountant">Kế toán</option><option value="gvhd">GV hướng dẫn</option><option value="tg">Tác giả (HS dự thi)</option><option value="admin">Admin</option></select></div>
     <div class="field"><label>Họ và tên</label><input id="cu-name" /></div>
     <div class="field" id="cu-emp-wrap" style="display:none"><label>Liên kết Nhân viên (để tính lương)</label>
       <select id="cu-emp"><option value="">— Chưa liên kết —</option>${empOptions}</select>
@@ -2194,7 +2340,7 @@ async function openCreateUser() {
 }
 /* Hiện thông tin đăng nhập vừa tạo để admin copy gửi cho người dùng */
 function showCredentials(info, onDone) {
-  const roleLbl = info.role === "teacher" ? "Giáo viên" : info.role === "admin" ? "Admin" : info.role === "leader" ? "Leader" : info.role === "accountant" ? "Kế toán" : "Học sinh";
+  const roleLbl = info.role === "teacher" ? "Giáo viên" : info.role === "admin" ? "Admin" : info.role === "leader" ? "Leader" : info.role === "accountant" ? "Kế toán" : info.role === "gvhd" ? "GV hướng dẫn" : info.role === "tg" ? "Tác giả" : "Học sinh";
   const combined = `Tài khoản ${roleLbl} — ${SITE}\nEmail: ${info.email}\nMật khẩu: ${info.pass}`;
   showModal("Đã tạo tài khoản ✅", `
     <div class="card" style="margin:0;background:var(--surface-2)">
