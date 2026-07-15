@@ -481,6 +481,7 @@ function parseCSV(text) {
 }
 const parseNum = (x) => Number(String(x == null ? "" : x).replace(/[^\d.-]/g, "")) || 0;
 function bcontent() { return document.getElementById("bcontent"); }
+const attachLinks = (str) => (str || "").split(/\s*\n\s*/).map((x) => x.trim()).filter(Boolean).map((u, i) => `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(u)}" style="margin:2px 6px 2px 0">📎 Link ${i + 1}</a>`).join("");
 function bizSoon(name) { bcontent().innerHTML = `<div class="empty"><div class="em">🛠️</div><p>Phần <b>${esc(name)}</b> sẽ được làm ở vòng sau.</p></div>`; }
 
 function bizHome() {
@@ -1303,14 +1304,15 @@ async function projectDetail(p) {
           <div class="meta"><b>${fmtDate(x.report_date)}</b></div>
           ${(isAdmin || x.created_by === meId) ? `<a href="#" data-pgdel="${x.id}" style="color:var(--red);text-decoration:none">✕ Xoá</a>` : ""}</div>
         <div style="margin:4px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
-        ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Xem đính kèm</a>` : ""}
+        ${attachLinks(x.attach_url)}
       </div>`).join("");
     body.insertAdjacentHTML("beforeend", `
       <h3 style="font-size:14px;margin:16px 0 4px">Thông báo tiến độ</h3>
       <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
         <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="pg-date" type="date" value="${new Date().toISOString().slice(0, 10)}"/></div>
         <div class="field" style="flex:2;min-width:180px;margin:0"><label>Nội dung</label><input id="pg-content" placeholder="Hôm nay đã làm gì…"/></div>
-        <div class="field" style="flex:1;min-width:150px;margin:0"><label>Link ảnh/biểu đồ/tài liệu</label><input id="pg-url" placeholder="https://… (không bắt buộc)"/></div>
+        <div class="field" style="flex:2;min-width:220px;margin:0"><label>Link ảnh/biểu đồ/tài liệu (mỗi dòng 1 link)</label><textarea id="pg-url" rows="2" placeholder="https://…
+https://…"></textarea></div>
         <button class="btn" id="pg-add" type="button">Đăng</button></div>
       <div id="pg-list">${pgRows || `<p class="meta" style="margin:8px 0 0">Chưa có báo cáo tiến độ.</p>`}</div>`);
     document.getElementById("pg-add").onclick = async (e) => {
@@ -1399,12 +1401,13 @@ async function leaderTasks() {
           <div style="display:flex;justify-content:space-between;gap:8px"><span class="meta"><b>${fmtDate(x.report_date)}</b></span>
             ${x.created_by === state.profile.id ? `<a href="#" data-lpgdel="${x.id}" style="color:var(--red);text-decoration:none">✕</a>` : ""}</div>
           <div style="margin:2px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
-          ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Đính kèm</a>` : ""}
+          ${attachLinks(x.attach_url)}
         </div>`).join("") || `<p class="meta" style="margin:4px 0 0">Chưa có báo cáo.</p>`}
       <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap;margin-top:8px">
         <div class="field" style="max-width:150px;margin:0"><label>Ngày</label><input class="lpg-date" data-pid="${g.p.id}" type="date" value="${new Date().toISOString().slice(0, 10)}"/></div>
         <div class="field" style="flex:2;min-width:160px;margin:0"><label>Nội dung</label><input class="lpg-content" data-pid="${g.p.id}" placeholder="Hôm nay đã làm gì…"/></div>
-        <div class="field" style="flex:1;min-width:140px;margin:0"><label>Link đính kèm</label><input class="lpg-url" data-pid="${g.p.id}" placeholder="https://…"/></div>
+        <div class="field" style="flex:2;min-width:220px;margin:0"><label>Link đính kèm (mỗi dòng 1 link)</label><textarea class="lpg-url" data-pid="${g.p.id}" rows="2" placeholder="https://…
+https://…"></textarea></div>
         <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div></div>`;
   };
   const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
@@ -1482,7 +1485,7 @@ async function guestProjects() {
     const pgrows = pg.map((x) => `<div style="padding:10px 0;border-top:1px solid var(--line)">
         <div class="meta"><b>${fmtDate(x.report_date)}</b></div>
         <div style="margin:4px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
-        ${x.attach_url ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(x.attach_url)}">📎 Xem đính kèm</a>` : ""}
+        ${attachLinks(x.attach_url)}
       </div>`).join("");
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
