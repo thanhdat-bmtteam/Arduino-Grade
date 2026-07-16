@@ -337,7 +337,8 @@ function removeVN(s) {
 const STUDENT_DOMAIN = CFG.STUDENT_EMAIL_DOMAIN || "student.bmt";
 function studentLocalPart(fullName) {
   const parts = removeVN(fullName).trim().split(/\s+/).filter(Boolean);
-  const use = parts.length > 1 ? parts.slice(1) : parts; // bỏ họ nếu có nhiều từ
+  let use = parts.length > 1 ? parts.slice(1) : parts; // bỏ họ nếu có nhiều từ
+  if (use.length > 2) use = use.slice(-2);             // giữ tối đa 2 từ cuối (bỏ chữ đệm thừa)
   return use.join("").toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 let sb = null;
@@ -2054,7 +2055,7 @@ function renderAuth() {
       <p class="muted">Đăng nhập để vào lớp, hoặc đăng ký học không cần tài khoản.</p>
       <div class="auth-tabs">
         <button id="tab-login" class="active">Đăng nhập</button>
-        <button id="tab-reg">Đăng ký học</button>
+        <button id="tab-reg">Đăng ký</button>
       </div>
       <div id="auth-form"></div>
     </div></div>
@@ -2087,13 +2088,17 @@ function setAuthTab(which) {
     const DVHC = window.VN_DVHC || {};
     const provinceOpts = Object.keys(DVHC).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
     box.innerHTML = `
-      <p class="muted" style="margin-top:-4px">Điền đầy đủ thông tin (các mục có dấu *), trung tâm sẽ liên hệ xếp lớp.</p>
+      <p class="muted" style="margin-top:-4px">Điền đầy đủ thông tin (các mục có dấu *), trung tâm sẽ liên hệ sớm.</p>
+      <div class="field"><label>Bạn đăng ký gì? *</label>
+        <select id="rg-type"><option value="course">Học lớp tại trung tâm</option><option value="project">Nghiên cứu dự án (GVHD / Tác giả dự thi)</option></select></div>
+      <div class="field" id="rg-role-wrap" style="display:none"><label>Vai trò *</label>
+        <select id="rg-role"><option value="gvhd">Giáo viên hướng dẫn</option><option value="tg">Tác giả (Học sinh dự thi)</option></select></div>
       <div class="field"><label>Họ và tên *</label><input id="rg-name" /></div>
       <div class="row">
         <div class="field"><label>Ngày sinh *</label><input id="rg-dob" type="date" /></div>
-        <div class="field"><label>Khối học *</label><select id="rg-grade"><option value="">— Chọn khối —</option>${gradeOpts}</select></div>
+        <div class="field rg-co"><label>Khối học *</label><select id="rg-grade"><option value="">— Chọn khối —</option>${gradeOpts}</select></div>
       </div>
-      <div class="field"><label>Đăng ký lớp/khoá *</label>
+      <div class="field rg-co"><label>Đăng ký lớp/khoá *</label>
         <select id="rg-course"><option value="">Đang tải lớp...</option></select></div>
       <div class="row">
         <div class="field"><label>Email *</label><input id="rg-email" type="email" /></div>
@@ -2107,14 +2112,21 @@ function setAuthTab(which) {
         <input id="rg-school" list="rg-schools" placeholder="Chọn hoặc gõ tên trường" />
         <datalist id="rg-schools">${schoolOpts}</datalist>
         <div class="help">Gợi ý theo tỉnh/xã đã chọn — vẫn gõ tay được nếu không có trong danh sách.</div></div>
-      <div class="field"><label>SĐT phụ huynh *</label><input id="rg-pphone" inputmode="tel" /></div>
-      <div class="field"><label>Có máy tính cá nhân không? *</label>
+      <div class="field rg-co"><label>SĐT phụ huynh *</label><input id="rg-pphone" inputmode="tel" /></div>
+      <div class="field rg-co"><label>Có máy tính cá nhân không? *</label>
         <div style="display:flex;gap:18px;padding-top:4px">
           <label class="opt" style="font-weight:500"><input type="radio" name="rg-pc" value="true" style="width:auto"/> Có</label>
           <label class="opt" style="font-weight:500"><input type="radio" name="rg-pc" value="false" style="width:auto"/> Không</label>
         </div></div>
       <div class="field"><label>Ghi chú (không bắt buộc)</label><textarea id="rg-note" style="min-height:60px"></textarea></div>
       <button class="btn block teal" id="rg-btn">Gửi đăng ký</button>`;
+    const typeSel = document.getElementById("rg-type");
+    const toggleType = () => {
+      const isProj = typeSel.value === "project";
+      document.getElementById("rg-role-wrap").style.display = isProj ? "" : "none";
+      box.querySelectorAll(".rg-co").forEach((el) => el.style.display = isProj ? "none" : "");
+    };
+    typeSel.onchange = toggleType; toggleType();
     const provSel = document.getElementById("rg-province");
     const wardSel = document.getElementById("rg-ward");
     const refreshSchools = () => {
@@ -2150,16 +2162,20 @@ function setAuthTab(which) {
         email = v("rg-email"), phone = v("rg-phone"), school = v("rg-school"),
         pphone = v("rg-pphone"), ward = v("rg-ward"), province = v("rg-province");
       const pcEl = box.querySelector('input[name="rg-pc"]:checked');
-      // Bắt buộc điền đủ
-      if (!name || !dob || !grade || !classId || !email || !phone || !school || !pphone || !ward || !province || !pcEl)
+      const isProj = document.getElementById("rg-type").value === "project";
+      const desiredRole = isProj ? document.getElementById("rg-role").value : "";
+      // Bắt buộc điền đủ (tuỳ loại đăng ký)
+      if (isProj) {
+        if (!name || !dob || !email || !phone || !school || !ward || !province)
+          return toast("Vui lòng điền đầy đủ các mục có dấu *", "err");
+      } else if (!name || !dob || !grade || !classId || !email || !phone || !school || !pphone || !ward || !province || !pcEl)
         return toast("Vui lòng điền đầy đủ các mục có dấu *", "err");
       if (!/^\S+@\S+\.\S+$/.test(email)) return toast("Email chưa hợp lệ", "err");
       e.target.disabled = true;
-      const { error } = await sb.from("course_registrations").insert({
-        full_name: name, birth_date: dob, grade, email, phone, school,
-        parent_phone: pphone, ward, province, has_computer: pcEl.value === "true",
-        class_id: classId, course_name: courseName, note: v("rg-note"),
-      });
+      const payload = isProj
+        ? { full_name: name, birth_date: dob, grade: "", email, phone, school, parent_phone: "", ward, province, has_computer: null, class_id: null, course_name: "", note: v("rg-note"), reg_type: "project", desired_role: desiredRole }
+        : { full_name: name, birth_date: dob, grade, email, phone, school, parent_phone: pphone, ward, province, has_computer: pcEl.value === "true", class_id: classId, course_name: courseName, note: v("rg-note"), reg_type: "course", desired_role: "" };
+      const { error } = await sb.from("course_registrations").insert(payload);
       e.target.disabled = false;
       if (error) return toast("Lỗi: " + error.message, "err");
       box.innerHTML = `<div class="empty"><div class="em">✅</div><h3>Đã nhận đăng ký!</h3>
@@ -2173,7 +2189,7 @@ function navItems() {
   const r = state.profile.role;
   if (r === "admin") return [
     ["admin-dash", "Tổng quan", "▦"], ["admin-users", "Tài khoản", "👤"],
-    ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký học", "📝"],
+    ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
   if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"]];
@@ -2467,7 +2483,7 @@ async function adminRegs() {
       <td><b>${esc(r.full_name)}</b>
         <div class="meta">${r.birth_date ? "NS: " + fmtDate(r.birth_date) + " • " : ""}${r.grade ? "Khối " + esc(r.grade) : ""}</div>
         <div class="meta">${esc(r.school || "")}</div>
-        ${r.course_name ? `<span class="badge blue">${esc(r.course_name)}</span>` : ""}</td>
+        ${r.reg_type === "project" ? `<span class="badge amber">Nghiên cứu dự án · ${r.desired_role === "gvhd" ? "GVHD" : "Tác giả"}</span>` : (r.course_name ? `<span class="badge blue">${esc(r.course_name)}</span>` : "")}</td>
       <td class="meta">CN: ${esc(r.phone || "—")}<br/>PH: ${esc(r.parent_phone || "—")}<br/>${esc(r.email || "")}</td>
       <td class="meta">${esc(r.ward || "")}${r.ward && r.province ? ", " : ""}${esc(r.province || "")}</td>
       <td>${r.has_computer === true ? '<span class="badge green">Có máy</span>' : r.has_computer === false ? '<span class="badge gray">Không</span>' : "—"}</td>
@@ -2481,7 +2497,7 @@ async function adminRegs() {
       </td>
     </tr>`).join("");
   setContent(`
-    <div class="section-title"><h2>Đăng ký học</h2></div>
+    <div class="section-title"><h2>Đăng ký</h2></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
@@ -2502,31 +2518,35 @@ async function approveRegToAccount(reg) {
   const base = studentLocalPart(reg.full_name);
   if (!base) return toast("Không tạo được email từ họ tên — kiểm tra lại tên.", "err");
   const personal = (reg.email || "").trim();
-  if (!confirm(`Tạo tài khoản học sinh cho "${reg.full_name}"\nEmail đăng nhập: ${base}@${STUDENT_DOMAIN}` + (reg.class_id ? `\nThêm vào lớp: ${reg.course_name || ""}` : "") + "?")) return;
+  const isProj = reg.reg_type === "project";
+  const role = isProj ? (reg.desired_role === "gvhd" ? "gvhd" : "tg") : "student";
+  const domain = role === "gvhd" ? "gvhd.bmt" : role === "tg" ? "tg.bmt" : STUDENT_DOMAIN;
+  const roleLbl = role === "gvhd" ? "GV hướng dẫn" : role === "tg" ? "Tác giả (HS dự thi)" : "học sinh";
+  if (!confirm(`Tạo tài khoản ${roleLbl} cho "${reg.full_name}"\nEmail đăng nhập: ${base}@${domain}` + (!isProj && reg.class_id ? `\nThêm vào lớp: ${reg.course_name || ""}` : "") + (isProj ? "\n(Sau khi tạo, vào Quản lý → Dự án → Chi tiết để phân công vào dự án.)" : "") + "?")) return;
   const pass = Math.random().toString(36).slice(2, 10);
-  let userId = null, email = `${base}@${STUDENT_DOMAIN}`, attempt = 0;
+  let userId = null, email = `${base}@${domain}`, attempt = 0;
   // Tạo tài khoản; nếu trùng email (trùng tên) thì thêm số: vantam2, vantam3...
   while (true) {
     try {
-      const u = await adminCreateUser(email, pass, reg.full_name, "student");
+      const u = await adminCreateUser(email, pass, reg.full_name, role);
       userId = u && u.id; break;
     } catch (err) {
       if (/registered|already|exists/i.test(err.message || "")) {
         attempt++;
         if (attempt > 50) return toast("Quá nhiều tài khoản trùng tên — thử lại sau.", "err");
-        email = `${base}${attempt + 1}@${STUDENT_DOMAIN}`;
+        email = `${base}${attempt + 1}@${domain}`;
         continue;
       }
       return toast("Lỗi tạo tài khoản: " + err.message, "err");
     }
   }
-  // Thêm vào lớp đã chọn lúc đăng ký (nếu có)
-  if (reg.class_id && userId) {
+  // Thêm vào lớp đã chọn lúc đăng ký (chỉ hồ sơ học lớp)
+  if (!isProj && reg.class_id && userId) {
     const { error: me } = await sb.from("class_members").insert({ class_id: reg.class_id, student_id: userId });
     if (me && !/duplicate|unique/i.test(me.message || "")) toast("Lưu ý: không thêm được vào lớp (" + me.message + ")", "err");
   }
   await sb.from("course_registrations").update({ status: "enrolled" }).eq("id", reg.id);
-  showCredentials({ name: reg.full_name, email, pass, role: "student", personal }, adminRegs);
+  showCredentials({ name: reg.full_name, email, pass, role, personal }, adminRegs);
 }
 
 /* ============================================================================
