@@ -1018,6 +1018,57 @@ async function exportProjectInvoicesModal(p) {
 }
 
 /* ---------- Dự án (thu / chi / lợi nhuận) ---------- */
+/* ---------- QR nhận tiền dự án (1 STK dùng chung, cấu hình ở biz_settings.thu_qr) ---------- */
+function projectCode(name) { return (name || "").trim().split(/\s+/)[0] || "DUAN"; }
+async function showProjectQR(p) {
+  const code = projectCode(p.name);
+  const info = removeVN("Chuyen tien du an " + code).replace(/\s+/g, " ").trim();
+  showModal("QR nhận tiền — " + esc(code), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`);
+  const body = modalRoot().querySelector(".modal-body");
+  const { data: row } = await sb.from("biz_settings").select("value").eq("key", "thu_qr").maybeSingle();
+  let cfg = (row && row.value) || {};
+  const isAdmin = state.profile.role === "admin";
+  const cfgForm = () => `
+    <div class="card" style="margin-top:10px">
+      <b style="font-size:13px">⚙ Tài khoản nhận (dùng chung mọi dự án)</b>
+      <div class="row" style="margin-top:6px;flex-wrap:wrap;gap:6px;align-items:flex-end">
+        <div class="field" style="flex:1;min-width:140px;margin:0"><label>Tên chủ TK</label><input id="tq-name" value="${esc(cfg.name || "")}"/></div>
+        <div class="field" style="flex:1;min-width:130px;margin:0"><label>Số tài khoản</label><input id="tq-acc" value="${esc(cfg.bank_account || "")}"/></div>
+        <div class="field" style="flex:1;min-width:140px;margin:0"><label>Ngân hàng</label><select id="tq-bank"><option value="">— Chọn —</option>${BANKS.map(([c, l]) => `<option value="${c}" ${cfg.bank_code === c ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+        <button class="btn sm" id="tq-save" type="button">Lưu</button></div></div>`;
+  const render = () => {
+    const ok = cfg && cfg.bank_account && cfg.bank_code;
+    body.innerHTML = `
+      ${ok ? `<div style="text-align:center">
+        <div class="field" style="max-width:260px;margin:0 auto 8px"><label>Số tiền (đ) *</label><input id="tq-amt" type="number" placeholder="Nhập số tiền cần thu" style="text-align:right"/></div>
+        <p id="tq-hint" class="meta" style="color:var(--muted)">Nhập số tiền để tạo mã QR.</p>
+        <img id="tq-img" alt="VietQR" style="max-width:280px;width:100%;border:1px solid var(--line);border-radius:12px;display:none"/>
+        <p class="meta" style="margin-top:8px">${esc(cfg.name || "")} · ${esc(bankLabel(cfg.bank_code))} · STK: <b>${esc(cfg.bank_account)}</b><br>Nội dung CK: <code>${esc(info)}</code></p>
+      </div>` : `<div class="empty">Chưa cấu hình tài khoản nhận tiền.${isAdmin ? " Điền bên dưới." : " Báo Admin thiết lập."}</div>`}
+      ${isAdmin ? cfgForm() : ""}`;
+    if (ok) {
+      const img = body.querySelector("#tq-img"), amtEl = body.querySelector("#tq-amt"), hint = body.querySelector("#tq-hint");
+      const upd = () => {
+        const amt = Math.max(0, Math.round(Number(amtEl.value) || 0));
+        if (amt <= 0) { img.style.display = "none"; hint.style.display = ""; return; }
+        hint.style.display = "none"; img.style.display = "";
+        img.src = `https://img.vietqr.io/image/${encodeURIComponent(cfg.bank_code)}-${encodeURIComponent(cfg.bank_account)}-compact2.png?addInfo=${encodeURIComponent(info)}&accountName=${encodeURIComponent(removeVN(cfg.name || ""))}&amount=${amt}`;
+      };
+      amtEl.oninput = upd; upd();
+    }
+    if (isAdmin) {
+      body.querySelector("#tq-save").onclick = async () => {
+        const val = { name: body.querySelector("#tq-name").value.trim(), bank_account: body.querySelector("#tq-acc").value.trim(), bank_code: body.querySelector("#tq-bank").value };
+        if (!val.bank_account || !val.bank_code) return toast("Nhập STK + chọn ngân hàng", "err");
+        const { error } = await sb.from("biz_settings").upsert({ key: "thu_qr", value: val }, { onConflict: "key" });
+        if (error) return toast("Lỗi: " + error.message, "err");
+        cfg = val; toast("Đã lưu tài khoản nhận", "ok"); render();
+      };
+    }
+  };
+  render();
+}
+
 async function bizProjects() {
   bcontent().innerHTML = loadingHTML();
   const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }] = await Promise.all([
@@ -1049,6 +1100,7 @@ async function bizProjects() {
           <span class="meta" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.note ? "📝 " + esc(p.note) : ""}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
           ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Drive</a>` : ""}
+          <button class="btn ghost sm" data-pjqr="${p.id}">💰 QR thu</button>
           <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
           <button class="btn ghost sm" data-pjed="${p.id}">Sửa</button>
@@ -1066,6 +1118,7 @@ async function bizProjects() {
   document.getElementById("pj-new").onclick = () => openProjectModal();
   on("[data-pjed]", "click", (e) => openProjectModal(pmap[e.currentTarget.dataset.pjed]), bcontent());
   on("[data-pjexp]", "click", (e) => exportProjectInvoicesModal(pmap[e.currentTarget.dataset.pjexp]), bcontent());
+  on("[data-pjqr]", "click", (e) => showProjectQR(pmap[e.currentTarget.dataset.pjqr]), bcontent());
   on("[data-pjdet]", "click", (e) => projectDetail(pmap[e.currentTarget.dataset.pjdet]), bcontent());
   on("[data-pjdel]", "click", async (e) => {
     const name = e.currentTarget.dataset.name;
@@ -1120,6 +1173,7 @@ async function projectDetail(p) {
   const expRows = (expenses || []).map((x) => `<tr><td>${esc(x.note || "")}${x.employee_name ? ` — <b>${esc(x.employee_name)}</b>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa</span>'}</td><td><button class="btn danger sm" data-expdel="${x.id}">✕</button></td></tr>`).join("");
   body.innerHTML = `
     <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button>
+      <button class="btn secondary sm" id="pj-qr">💰 QR nhận tiền</button>
       ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn secondary sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở thư mục Drive</a>` : ""}</div>
     <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công ${fmtVND(expSum)}) · LN: <b style="color:${thu - chi < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(thu - chi)}</b></div>
 
@@ -1149,6 +1203,7 @@ async function projectDetail(p) {
       <button class="btn" id="exp-add" type="button">Thêm chi NV</button></div>
     <div class="help">Chọn Nội dung có sẵn sẽ tự điền số tiền gợi ý (vẫn sửa được). Khoản chi có tên nhân viên sẽ tự cộng vào lương của người đó ở thẻ Nhân viên.</div>`;
   document.getElementById("pj-exp").onclick = () => exportProjectInvoicesModal(p);
+  document.getElementById("pj-qr").onclick = () => showProjectQR(p);
   {
     const noteEl = document.getElementById("exp-note"), amtEl = document.getElementById("exp-amt");
     const applyPrice = () => { const v = noteEl.value.trim(); if (priceMap[v] != null && !amtEl.dataset.touched) amtEl.value = priceMap[v]; };
