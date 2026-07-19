@@ -482,6 +482,9 @@ function parseCSV(text) {
 }
 const parseNum = (x) => Number(String(x == null ? "" : x).replace(/[^\d.-]/g, "")) || 0;
 function bcontent() { return document.getElementById("bcontent"); }
+// Chi -> Nhiệm vụ: ánh xạ tên khác nhau + các khoản chi KHÔNG tự sinh nhiệm vụ
+const CHI2TASK = { "Ý tưởng": "Viết đề cương" };
+const TASK_SKIP = new Set(["Thiết kế Poster", "Tiền phụ cấp"]);
 const attachLinks = (str) => (str || "").split(/\s*\n\s*/).map((x) => x.trim()).filter(Boolean).map((u, i) => `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(u)}" style="margin:2px 6px 2px 0">📎 Link ${i + 1}</a>`).join("");
 function bizSoon(name) { bcontent().innerHTML = `<div class="empty"><div class="em">🛠️</div><p>Phần <b>${esc(name)}</b> sẽ được làm ở vòng sau.</p></div>`; }
 
@@ -1163,6 +1166,7 @@ async function projectDetail(p) {
   ]);
   const ndList = (ndRow && ndRow.value && ndRow.value.list) || [];
   const priceMap = (priceRow && priceRow.value) || {};
+  const taskNd = [...new Set(ndList.map((n) => CHI2TASK[n] || n))].filter((n) => !TASK_SKIP.has(n));
   const empNames = (emps || []).map((e) => e.name);
   const invSum = (invoices || []).reduce((s, x) => s + Number(x.total || 0), 0);
   const expSum = (expenses || []).reduce((s, x) => s + Number(x.amount || 0), 0);
@@ -1225,7 +1229,32 @@ async function projectDetail(p) {
     e.target.disabled = true;
     const { error } = await sb.from("biz_expenses").insert({ project_id: p.id, amount: amt, note: document.getElementById("exp-note").value.trim(), employee_name: document.getElementById("exp-emp").value.trim(), expense_date: document.getElementById("exp-date").value || null, paid: false });
     if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    toast("Đã thêm khoản chi", "ok"); projectDetail(p);
+    // Tự sinh nhiệm vụ tương ứng nếu nhân viên là Leader có tài khoản
+    const empName2 = document.getElementById("exp-emp").value.trim();
+    const noteVal2 = document.getElementById("exp-note").value.trim();
+    if (empName2 && noteVal2 && !TASK_SKIP.has(noteVal2)) {
+      try {
+        const title2 = CHI2TASK[noteVal2] || noteVal2;
+        const [{ data: empRows2 }, { data: leaders2 }] = await Promise.all([
+          sb.from("biz_employees").select("id,name").eq("name", empName2).limit(1),
+          sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
+        ]);
+        const n2 = (v) => (v || "").toString().trim().toLowerCase();
+        const empRow2 = (empRows2 || [])[0];
+        let lead2 = empRow2 ? (leaders2 || []).find((l) => n2(l.biz_employee_id) === n2(empRow2.id)) : null;
+        if (!lead2) lead2 = (leaders2 || []).find((l) => n2(l.full_name) === n2(empName2));
+        if (lead2) {
+          const { data: dup2 } = await sb.from("biz_tasks").select("id").eq("project_id", p.id).eq("assignee_id", lead2.id).eq("title", title2).limit(1);
+          if (dup2 && dup2.length) toast("Đã thêm khoản chi (nhiệm vụ \"" + title2 + "\" đã có sẵn)", "ok");
+          else {
+            const { error: te2 } = await sb.from("biz_tasks").insert({ project_id: p.id, title: title2, assignee_id: lead2.id, status: "todo" });
+            if (te2) toast("Khoản chi đã lưu; không tạo được nhiệm vụ: " + te2.message, "err");
+            else toast(`Đã thêm chi + tạo nhiệm vụ "${title2}" cho ${lead2.full_name}`, "ok");
+          }
+        } else toast("Đã thêm khoản chi (nhân viên chưa liên kết tài khoản Leader nên không tạo nhiệm vụ)", "ok");
+      } catch (err) { console.error("auto-task:", err); toast("Đã thêm khoản chi", "ok"); }
+    } else toast("Đã thêm khoản chi", "ok");
+    projectDetail(p);
   };
   on("[data-incdel]", "click", async (e) => {
     if (!confirm("Xoá khoản thu này?")) return;
@@ -1270,7 +1299,7 @@ async function projectDetail(p) {
       ex = ex || {};
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
-          <datalist id="tk-title-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
+          <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
         <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
         ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
