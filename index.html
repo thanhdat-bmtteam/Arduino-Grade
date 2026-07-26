@@ -1577,15 +1577,26 @@ async function guestProjects() {
         <div style="margin:4px 0">${esc(x.content).replace(/\n/g, "<br>")}</div>
         ${attachLinks(x.attach_url)}
       </div>`).join("");
+    const isTG = state.profile.role === "tg";
+    const doneCnt = ts.filter((t) => t.status === "done").length;
+    const pct = ts.length ? Math.round(doneCnt / ts.length * 100) : 0;
+    const segs = ts.map((t) => `<div title="${esc(t.title)} — ${t.status === "done" ? "Đã duyệt" : "Chưa hoàn tất"}" style="flex:1;height:14px;border-radius:6px;background:${t.status === "done" ? "var(--green)" : "#e5e7eb"};border:1px solid rgba(0,0,0,.06)"></div>`).join("");
+    const assignBlock = isTG
+      ? `<h3 style="font-size:14px;margin:12px 0 4px">Tiến độ dự án</h3>
+         ${ts.length
+           ? `<div style="display:flex;gap:6px;margin:6px 0 4px">${segs}</div>
+              <p class="meta">Đã xong <b>${doneCnt}/${ts.length}</b> phần việc (${pct}%).</p>`
+           : `<p class="meta">Chưa có phần việc nào.</p>`}`
+      : `<h3 style="font-size:14px;margin:12px 0 4px">Phân công thực hiện</h3>
+         <div class="table-wrap"><table style="table-layout:fixed;width:100%">
+           <colgroup><col style="width:40%"><col style="width:35%"><col style="width:25%"></colgroup>
+           <thead><tr><th>Phần việc</th><th>Người thực hiện</th><th>Trạng thái</th></tr></thead>
+           <tbody>${trows || `<tr><td colspan="3" class="empty">Chưa phân công.</td></tr>`}</tbody></table></div>`;
     return `<div class="card">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(p.name)}</b>
         ${p.drive_url ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Thư mục tài liệu (Drive)</a>` : `<span class="meta">Chưa có link Drive.</span>`}</div>
-      <h3 style="font-size:14px;margin:12px 0 4px">Phân công thực hiện</h3>
-      <div class="table-wrap"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:40%"><col style="width:35%"><col style="width:25%"></colgroup>
-        <thead><tr><th>Phần việc</th><th>Người thực hiện</th><th>Trạng thái</th></tr></thead>
-        <tbody>${trows || `<tr><td colspan="3" class="empty">Chưa phân công.</td></tr>`}</tbody></table></div>
+      ${assignBlock}
       <h3 style="font-size:14px;margin:14px 0 2px">Thông báo tiến độ</h3>
       ${pgrows || `<p class="meta" style="margin:6px 0 0">Chưa có báo cáo tiến độ.</p>`}
     </div>`;
