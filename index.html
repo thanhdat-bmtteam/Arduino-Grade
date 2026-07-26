@@ -1580,11 +1580,14 @@ async function guestProjects() {
     const isTG = state.profile.role === "tg";
     const doneCnt = ts.filter((t) => t.status === "done").length;
     const pct = ts.length ? Math.round(doneCnt / ts.length * 100) : 0;
-    const segs = ts.map((t) => `<div title="${esc(t.title)} — ${t.status === "done" ? "Đã duyệt" : "Chưa hoàn tất"}" style="flex:1;height:14px;border-radius:6px;background:${t.status === "done" ? "var(--green)" : "#e5e7eb"};border:1px solid rgba(0,0,0,.06)"></div>`).join("");
+    const segs = ts.map((t) => `<div style="flex:1;display:flex;flex-direction:column;gap:6px;min-width:0">
+        <div title="${esc(t.title)} — ${t.status === "done" ? "Đã duyệt" : "Chưa hoàn tất"}" style="height:14px;border-radius:6px;background:${t.status === "done" ? "var(--green)" : "#e5e7eb"};border:1px solid rgba(0,0,0,.06)"></div>
+        <div class="meta" style="text-align:center;font-size:11px;line-height:1.25;color:${t.status === "done" ? "var(--green)" : "var(--muted)"};font-weight:${t.status === "done" ? "700" : "400"};overflow:hidden;text-overflow:ellipsis" title="${esc(t.title)}">${esc(t.title)}</div>
+      </div>`).join("");
     const assignBlock = isTG
       ? `<h3 style="font-size:14px;margin:12px 0 4px">Tiến độ dự án</h3>
          ${ts.length
-           ? `<div style="display:flex;gap:6px;margin:6px 0 4px">${segs}</div>
+           ? `<div style="display:flex;gap:8px;align-items:flex-start;margin:6px 0 4px">${segs}</div>
               <p class="meta">Đã xong <b>${doneCnt}/${ts.length}</b> phần việc (${pct}%).</p>`
            : `<p class="meta">Chưa có phần việc nào.</p>`}`
       : `<h3 style="font-size:14px;margin:12px 0 4px">Phân công thực hiện</h3>
