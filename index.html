@@ -416,7 +416,9 @@ function badgeRole(r) {
     : r === "teacher" ? `<span class="badge blue">Giáo viên</span>`
       : r === "leader" ? `<span class="badge red">Leader</span>`
         : r === "accountant" ? `<span class="badge blue">Kế toán</span>`
-          : `<span class="badge teal">Học sinh</span>`;
+          : r === "gvhd" ? `<span class="badge blue">GV hướng dẫn</span>`
+            : r === "tg" ? `<span class="badge amber">Tác giả</span>`
+              : `<span class="badge teal">Học sinh</span>`;
 }
 async function uploadFile(file, folder) {
   const safe = file.name.replace(/[^\w.\-]/g, "_");
