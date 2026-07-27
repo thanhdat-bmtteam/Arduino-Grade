@@ -1472,11 +1472,18 @@ async function renderProjectFiles(p, body) {
     </div>`;
   }).join("");
   body.insertAdjacentHTML("beforeend", `
-    <h3 style="font-size:14px;margin:16px 0 4px">📎 Tệp của dự án</h3>
-    <p class="meta" style="margin:0 0 6px">Upload trực tiếp lên hệ thống. Người khác chỉ xem được khi được cấp quyền (Admin/Leader thấy tất cả).</p>
-    ${canUpload ? `<div class="pill-row"><label class="btn sm" style="cursor:pointer">＋ Tải tệp lên<input type="file" class="pf-file" multiple style="display:none"/></label>
-      <span class="pf-status meta"></span></div>` : `<p class="meta">Bạn không có quyền upload trong dự án này.</p>`}
-    <div class="pf-list">${rows || `<p class="meta" style="margin:6px 0 0">Chưa có tệp nào.</p>`}</div>`);
+    <details style="margin-top:14px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:var(--surface)">
+      <summary style="cursor:pointer;font-weight:700;padding:4px 0;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <span>📁 Thư mục tài liệu <span class="meta" style="font-weight:400">(${list.length} tệp)</span></span>
+        <span class="meta" style="font-weight:400;font-size:11px">Bấm để mở/đóng</span>
+      </summary>
+      <div style="padding-top:8px;border-top:1px solid var(--line);margin-top:6px">
+        <p class="meta" style="margin:0 0 6px">Upload trực tiếp lên hệ thống. Người khác chỉ xem được khi được cấp quyền (Admin/Leader thấy tất cả).</p>
+        ${canUpload ? `<div class="pill-row"><label class="btn sm" style="cursor:pointer">＋ Tải tệp lên<input type="file" class="pf-file" multiple style="display:none"/></label>
+          <span class="pf-status meta"></span></div>` : `<p class="meta">Bạn không có quyền upload trong dự án này.</p>`}
+        <div class="pf-list">${rows || `<p class="meta" style="margin:6px 0 0">Chưa có tệp nào.</p>`}</div>
+      </div>
+    </details>`);
   if (canUpload) {
     const fileInp = body.querySelector(".pf-file");
     const status = body.querySelector(".pf-status");
@@ -1537,16 +1544,20 @@ async function openShareModal(f, p) {
   // Ai được chọn?
   // - Admin/Leader dự án: chọn được mọi thành viên dự án + mọi leader/gvhd/tg
   // - GVHD: chỉ chọn TG (thành viên dự án role='tg')
-  const [{ data: members }, { data: shares }] = await Promise.all([
-    sb.from("biz_project_members").select("profile_id"),
+  const [{ data: members }, { data: projTasks }, { data: shares }] = await Promise.all([
+    sb.from("biz_project_members").select("profile_id").eq("project_id", p.id),
+    sb.from("biz_tasks").select("assignee_id").eq("project_id", p.id),
     sb.from("biz_file_shares").select("*").eq("file_id", f.id),
   ]);
+  // Người liên quan tới dự án này: gvhd/tg đã được admin thêm vào "Người xem" + leader có task giao trong dự án
   const memIds = new Set((members || []).map((m) => (m.profile_id || "").toLowerCase()));
-  const { data: cands } = await sb.from("profiles").select("id,full_name,email,role").in("role", ["gvhd", "tg", "leader"]).order("full_name");
+  const leaderIds = new Set((projTasks || []).map((t) => (t.assignee_id || "").toLowerCase()).filter(Boolean));
+  const relatedIds = new Set([...memIds, ...leaderIds]);
+  const { data: cands } = await sb.from("profiles").select("id,full_name,email,role").in("id", [...relatedIds]).order("full_name");
   const sharedIds = new Set((shares || []).map((s) => (s.viewer_id || "").toLowerCase()));
   let filtered = (cands || []).filter((c) => c.id !== me.id && c.id !== f.uploaded_by);
-  if (me.role === "gvhd") filtered = filtered.filter((c) => c.role === "tg" && memIds.has(c.id.toLowerCase()));
-  else filtered = filtered.filter((c) => c.role === "admin" || c.role === "leader" || memIds.has(c.id.toLowerCase()));
+  // GVHD chỉ được cấp cho TG (thành viên dự án role='tg')
+  if (me.role === "gvhd") filtered = filtered.filter((c) => c.role === "tg");
   const roleTag = (ro) => ro === "admin" ? "Admin" : ro === "leader" ? "Leader" : ro === "gvhd" ? "GVHD" : "Tác giả";
   const options = filtered.filter((c) => !sharedIds.has(c.id.toLowerCase()))
     .map((c) => `<label style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
