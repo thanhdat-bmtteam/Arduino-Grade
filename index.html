@@ -1421,6 +1421,171 @@ https://…"></textarea></div>
       projectDetail(p);
     }, body);
   }
+
+  // ===== Kho file dự án (upload thẳng lên Supabase Storage) =====
+  await renderProjectFiles(p, body);
+}
+
+/* ---------- Kho file dự án ---------- */
+const refreshFileHost = (p) => (state.profile.role === "gvhd" || state.profile.role === "tg") ? guestProjects() : projectDetail(p);
+const humanSize = (b) => { const u = ["B", "KB", "MB", "GB"]; let i = 0, n = Number(b) || 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + " " + u[i]; };
+async function renderProjectFiles(p, body) {
+  const me = state.profile;
+  const [{ data: files, error }, { data: members }, { data: leaders }] = await Promise.all([
+    sb.from("biz_files").select("*").eq("project_id", p.id).order("created_at", { ascending: false }),
+    sb.from("profiles").select("id,full_name,email,role").in("role", ["gvhd", "tg", "leader", "admin"]),
+    sb.from("biz_tasks").select("assignee_id").eq("project_id", p.id),
+  ]);
+  const list = files || [];
+  const profById = {}; (members || []).forEach((m) => profById[m.id] = m);
+  const roleTag = (ro) => ro === "admin" ? "Admin" : ro === "leader" ? "Leader" : ro === "gvhd" ? "GVHD" : ro === "tg" ? "Tác giả" : ro;
+  // Ai đang xem file này (tôi có quyền cấp cho file này không?)
+  const leaderAssigneeIds = new Set((leaders || []).map((t) => (t.assignee_id || "").toLowerCase()));
+  const isProjectLeader = me.role === "leader" && leaderAssigneeIds.has((me.id || "").toLowerCase());
+  const canShareFile = (f) => me.role === "admin" || isProjectLeader || (me.role === "gvhd" && f.uploaded_by === me.id);
+  const canDeleteFile = (f) => me.role === "admin" || f.uploaded_by === me.id;
+  const canUpload = me.role === "admin" || isProjectLeader || ["gvhd", "tg"].includes(me.role); // RLS chặn ai không phải member
+  // Fetch shares tất cả file này (tối ưu 1 query)
+  const fileIds = list.map((f) => f.id);
+  let sharesByFile = {};
+  if (fileIds.length) {
+    const { data: shares } = await sb.from("biz_file_shares").select("*").in("file_id", fileIds);
+    (shares || []).forEach((s) => { (sharesByFile[s.file_id] = sharesByFile[s.file_id] || []).push(s); });
+  }
+  const rows = list.map((f) => {
+    const up = profById[f.uploaded_by];
+    const shs = sharesByFile[f.id] || [];
+    const chips = shs.map((s) => { const v = profById[s.viewer_id]; if (!v) return ""; const canRevoke = me.role === "admin" || s.granted_by === me.id; return `<span class="badge gray" style="display:inline-flex;gap:4px;align-items:center;margin:2px 4px 2px 0">${esc(v.full_name)} <span class="meta">(${roleTag(v.role)})</span>${canRevoke ? ` <a href="#" data-fshdel="${s.id}" style="color:var(--red);text-decoration:none;margin-left:4px">✕</a>` : ""}</span>`; }).join("");
+    return `<div class="card" style="margin:6px 0">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
+        <div style="min-width:0;flex:1">
+          <b><a href="#" data-fdl="${f.id}">${esc(f.file_name)}</a></b>
+          <div class="meta">${humanSize(f.file_size)} · ${up ? esc(up.full_name) + " (" + roleTag(up.role) + ")" : "(?)"} · ${fmtDT(f.created_at)}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn ghost sm" data-fdl="${f.id}">⬇ Tải</button>
+          ${canShareFile(f) ? `<button class="btn ghost sm" data-fshare="${f.id}">👥 Cấp quyền</button>` : ""}
+          ${canDeleteFile(f) ? `<button class="btn danger sm" data-fdel="${f.id}" data-fname="${esc(f.file_name)}">✕</button>` : ""}
+        </div></div>
+      ${chips ? `<div style="margin-top:6px"><span class="meta">Được xem: </span>${chips}</div>` : ""}
+    </div>`;
+  }).join("");
+  body.insertAdjacentHTML("beforeend", `
+    <h3 style="font-size:14px;margin:16px 0 4px">📎 Tệp của dự án</h3>
+    <p class="meta" style="margin:0 0 6px">Upload trực tiếp lên hệ thống. Người khác chỉ xem được khi được cấp quyền (Admin/Leader thấy tất cả).</p>
+    ${canUpload ? `<div class="pill-row"><label class="btn sm" style="cursor:pointer">＋ Tải tệp lên<input type="file" id="pf-file" multiple style="display:none"/></label>
+      <span id="pf-status" class="meta"></span></div>` : `<p class="meta">Bạn không có quyền upload trong dự án này.</p>`}
+    <div id="pf-list">${rows || `<p class="meta" style="margin:6px 0 0">Chưa có tệp nào.</p>`}</div>`);
+  if (canUpload) {
+    document.getElementById("pf-file").onchange = async (ev) => {
+      const files = [...ev.target.files]; ev.target.value = "";
+      if (!files.length) return;
+      const status = document.getElementById("pf-status");
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        status.textContent = `Đang tải ${i + 1}/${files.length}: ${file.name}...`;
+        try { await uploadProjectFile(p, file); } catch (err) { toast("Lỗi upload " + file.name + ": " + (err.message || err), "err"); status.textContent = ""; return; }
+      }
+      status.textContent = "";
+      toast(`Đã tải lên ${files.length} tệp`, "ok");
+      refreshFileHost(p);
+    };
+  }
+  on("[data-fdl]", "click", async (e) => { e.preventDefault(); const f = list.find((x) => x.id === e.currentTarget.dataset.fdl); if (f) downloadProjectFile(f); }, body);
+  on("[data-fdel]", "click", async (e) => {
+    e.preventDefault();
+    const f = list.find((x) => x.id === e.currentTarget.dataset.fdel); if (!f) return;
+    if (!confirm(`Xoá tệp "${f.file_name}"?`)) return;
+    await sb.storage.from("project-files").remove([f.storage_path]);
+    const { error } = await sb.from("biz_files").delete().eq("id", f.id);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã xoá", "ok"); refreshFileHost(p);
+  }, body);
+  on("[data-fshdel]", "click", async (e) => {
+    e.preventDefault();
+    if (!confirm("Thu hồi quyền xem của người này?")) return;
+    const { error } = await sb.from("biz_file_shares").delete().eq("id", e.currentTarget.dataset.fshdel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã thu hồi", "ok"); refreshFileHost(p);
+  }, body);
+  on("[data-fshare]", "click", async (e) => {
+    e.preventDefault();
+    const f = list.find((x) => x.id === e.currentTarget.dataset.fshare); if (!f) return;
+    openShareModal(f, p);
+  }, body);
+}
+async function uploadProjectFile(p, file) {
+  const safe = file.name.replace(/[^\w.\-]/g, "_");
+  const path = `projects/${p.id}/${Date.now()}_${safe}`;
+  const { error: upErr } = await sb.storage.from("project-files").upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  if (upErr) throw upErr;
+  const { error: dbErr } = await sb.from("biz_files").insert({ project_id: p.id, storage_path: path, file_name: file.name, file_size: file.size, mime: file.type || "", uploaded_by: state.profile.id });
+  if (dbErr) { await sb.storage.from("project-files").remove([path]); throw dbErr; }
+}
+async function downloadProjectFile(f) {
+  const { data, error } = await sb.storage.from("project-files").createSignedUrl(f.storage_path, 300, { download: f.file_name });
+  if (error) return toast("Lỗi tải: " + error.message, "err");
+  const a = document.createElement("a"); a.href = data.signedUrl; a.download = f.file_name;
+  document.body.appendChild(a); a.click(); a.remove();
+}
+async function openShareModal(f, p) {
+  showModal("Cấp quyền xem — " + esc(f.file_name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`);
+  const body = modalRoot().querySelector(".modal-body");
+  const me = state.profile;
+  // Ai được chọn?
+  // - Admin/Leader dự án: chọn được mọi thành viên dự án + mọi leader/gvhd/tg
+  // - GVHD: chỉ chọn TG (thành viên dự án role='tg')
+  const [{ data: members }, { data: shares }] = await Promise.all([
+    sb.from("biz_project_members").select("profile_id"),
+    sb.from("biz_file_shares").select("*").eq("file_id", f.id),
+  ]);
+  const memIds = new Set((members || []).map((m) => (m.profile_id || "").toLowerCase()));
+  const { data: cands } = await sb.from("profiles").select("id,full_name,email,role").in("role", ["gvhd", "tg", "leader"]).order("full_name");
+  const sharedIds = new Set((shares || []).map((s) => (s.viewer_id || "").toLowerCase()));
+  let filtered = (cands || []).filter((c) => c.id !== me.id && c.id !== f.uploaded_by);
+  if (me.role === "gvhd") filtered = filtered.filter((c) => c.role === "tg" && memIds.has(c.id.toLowerCase()));
+  else filtered = filtered.filter((c) => c.role === "admin" || c.role === "leader" || memIds.has(c.id.toLowerCase()));
+  const roleTag = (ro) => ro === "admin" ? "Admin" : ro === "leader" ? "Leader" : ro === "gvhd" ? "GVHD" : "Tác giả";
+  const options = filtered.filter((c) => !sharedIds.has(c.id.toLowerCase()))
+    .map((c) => `<label style="display:flex;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line)">
+      <input type="checkbox" class="sh-chk" value="${c.id}"/>
+      <span style="flex:1">${esc(c.full_name)} <span class="meta">(${roleTag(c.role)}${c.email ? " — " + esc(c.email) : ""})</span></span>
+    </label>`).join("");
+  const already = (shares || []).map((s) => {
+    const v = filtered.find((x) => x.id === s.viewer_id) || (cands || []).find((x) => x.id === s.viewer_id);
+    if (!v) return "";
+    const canRevoke = me.role === "admin" || s.granted_by === me.id;
+    return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)">
+      <span>${esc(v.full_name)} <span class="meta">(${roleTag(v.role)})</span></span>
+      ${canRevoke ? `<a href="#" data-fshdel="${s.id}" style="color:var(--red);text-decoration:none">Thu hồi</a>` : `<span class="meta">— không thể thu hồi</span>`}
+    </div>`;
+  }).join("");
+  body.innerHTML = `
+    <div style="margin-bottom:10px"><b>Đã cấp cho</b>
+      <div style="margin-top:4px">${already || `<p class="meta" style="margin:4px 0 0">Chưa cấp cho ai.</p>`}</div></div>
+    <div><b>Thêm người xem</b>
+      ${options
+        ? `<div style="max-height:260px;overflow:auto;margin-top:4px">${options}</div>
+           <div class="pill-row" style="margin-top:8px"><button class="btn sm" id="sh-add" type="button">Cấp quyền cho các người đã tick</button></div>`
+        : `<p class="meta" style="margin:4px 0 0">Không còn ai để cấp thêm.</p>`}</div>`;
+  if (options) {
+    document.getElementById("sh-add").onclick = async (ev) => {
+      const ids = [...body.querySelectorAll(".sh-chk")].filter((c) => c.checked).map((c) => c.value);
+      if (!ids.length) return toast("Chọn ít nhất 1 người", "err");
+      ev.target.disabled = true;
+      const rows = ids.map((viewer_id) => ({ file_id: f.id, viewer_id, granted_by: me.id }));
+      const { error } = await sb.from("biz_file_shares").insert(rows);
+      if (error) { toast("Lỗi: " + error.message, "err"); ev.target.disabled = false; return; }
+      toast("Đã cấp quyền", "ok"); closeModal(); refreshFileHost(p);
+    };
+  }
+  on("[data-fshdel]", "click", async (e) => {
+    e.preventDefault();
+    if (!confirm("Thu hồi quyền xem?")) return;
+    const { error } = await sb.from("biz_file_shares").delete().eq("id", e.currentTarget.dataset.fshdel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã thu hồi", "ok"); closeModal(); refreshFileHost(p);
+  }, body);
 }
 
 /* ---------- View riêng của Leader ---------- */
@@ -1595,7 +1760,7 @@ async function guestProjects() {
            <colgroup><col style="width:40%"><col style="width:35%"><col style="width:25%"></colgroup>
            <thead><tr><th>Phần việc</th><th>Người thực hiện</th><th>Trạng thái</th></tr></thead>
            <tbody>${trows || `<tr><td colspan="3" class="empty">Chưa phân công.</td></tr>`}</tbody></table></div>`;
-    return `<div class="card">
+    return `<div class="card" data-gpcard="${p.id}">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(p.name)}</b>
         ${p.drive_url ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Thư mục tài liệu (Drive)</a>` : `<span class="meta">Chưa có link Drive.</span>`}</div>
@@ -1604,6 +1769,11 @@ async function guestProjects() {
       ${pgrows || `<p class="meta" style="margin:6px 0 0">Chưa có báo cáo tiến độ.</p>`}
     </div>`;
   }).join("");
+  // Chèn khối file cho từng dự án
+  for (const p of list) {
+    const card = body.querySelector(`[data-gpcard="${p.id}"]`);
+    if (card) await renderProjectFiles(p, card);
+  }
 }
 
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
