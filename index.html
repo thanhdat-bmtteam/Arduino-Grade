@@ -1104,7 +1104,6 @@ async function bizProjects() {
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-top:10px">
           <span class="meta" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.note ? "📝 " + esc(p.note) : ""}</span>
           <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
-          ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn ghost sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Drive</a>` : ""}
           <button class="btn ghost sm" data-pjqr="${p.id}">💰 QR thu</button>
           <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
@@ -1140,8 +1139,6 @@ function openProjectModal(ex) {
   showModal(ex.id ? "Sửa dự án" : "Tạo dự án", `
     <div class="field"><label>Tên dự án *</label><input id="pj-name" value="${esc(ex.name || "")}"/></div>
     <div class="field"><label>Báo giá (đ)</label><input id="pj-quote" type="number" value="${ex.quote ?? 0}"/></div>
-    <div class="field"><label>Thư mục Drive (link)</label><input id="pj-drive" value="${esc(ex.drive_url || "")}" placeholder="https://drive.google.com/drive/folders/…"/>
-      <div class="help">Chỉ Admin & Leader thấy nút mở. Nhớ share thư mục cho những người cần truy cập trước.</div></div>
     <div class="field"><label>Ghi chú</label><input id="pj-note" value="${esc(ex.note || "")}"/></div>
     <div class="help">Mẹo: đặt tên dự án trùng với ô "Dự án" trên hoá đơn để tự cộng vào phần Thu.</div>`,
     `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="pj-save">Lưu</button>`);
@@ -1149,7 +1146,7 @@ function openProjectModal(ex) {
     const name = document.getElementById("pj-name").value.trim();
     if (!name) return toast("Nhập tên dự án", "err");
     e.target.disabled = true;
-    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim(), drive_url: document.getElementById("pj-drive").value.trim() };
+    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim() };
     const res = ex.id ? await sb.from("biz_projects").update(payload).eq("id", ex.id) : await sb.from("biz_projects").insert(payload);
     if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
     toast("Đã lưu", "ok"); closeModal(); bizProjects();
@@ -1179,8 +1176,7 @@ async function projectDetail(p) {
   const expRows = (expenses || []).map((x) => `<tr><td>${esc(x.note || "")}${x.employee_name ? ` — <b>${esc(x.employee_name)}</b>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa</span>'}</td><td><button class="btn danger sm" data-expdel="${x.id}">✕</button></td></tr>`).join("");
   body.innerHTML = `
     <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button>
-      <button class="btn secondary sm" id="pj-qr">💰 QR nhận tiền</button>
-      ${p.drive_url && ["admin", "leader"].includes(state.profile.role) ? `<a class="btn secondary sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở thư mục Drive</a>` : ""}</div>
+      <button class="btn secondary sm" id="pj-qr">💰 QR nhận tiền</button></div>
     <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công ${fmtVND(expSum)}) · LN: <b style="color:${thu - chi < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(thu - chi)}</b></div>
 
     <h3 style="font-size:14px;margin:14px 0 4px">Thu — khoản nhận từ khách</h3>
@@ -1304,7 +1300,7 @@ async function projectDetail(p) {
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
         <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
-        ${p.drive_url ? `<p class="help">Link tài liệu chung của dự án: <a target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Mở Drive</a></p>` : `<p class="help">Chưa có link Drive dự án. Vào <b>Sửa dự án</b> để thêm.</p>`}`,
+`,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
       const titleEl = document.getElementById("tk-title");
       const toggleNote = () => { document.getElementById("tk-note-bg").style.display = titleEl.value.trim() === "Báo giá" ? "" : "none"; };
@@ -1427,7 +1423,12 @@ https://…"></textarea></div>
 }
 
 /* ---------- Kho file dự án ---------- */
-const refreshFileHost = (p) => (state.profile.role === "gvhd" || state.profile.role === "tg") ? guestProjects() : projectDetail(p);
+const refreshFileHost = (p) => {
+  const r = state.profile.role;
+  if (r === "gvhd" || r === "tg") return guestProjects();
+  if (r === "leader") return leaderTasks();
+  return projectDetail(p);
+};
 const humanSize = (b) => { const u = ["B", "KB", "MB", "GB"]; let i = 0, n = Number(b) || 0; while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; } return n.toFixed(n >= 10 || i === 0 ? 0 : 1) + " " + u[i]; };
 async function renderProjectFiles(p, body) {
   const me = state.profile;
@@ -1642,11 +1643,9 @@ async function leaderTasks() {
         <td>${stx(t.status)}</td>
         <td style="text-align:right;white-space:nowrap">${actionHTML}</td></tr>`;
     }).join("");
-    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+    return `<div class="card" data-mtcard="${g.p.id}"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(g.p.name)}</b>
-        ${g.p.drive_url
-          ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(g.p.drive_url)}">📁 Mở Drive để nộp file</a>`
-          : `<span class="meta" style="color:var(--muted)">Chưa có link Drive dự án — báo Admin dán link để nộp file.</span>`}</div>
+</div>
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
         <colgroup><col style="width:30%"><col style="width:24%"><col style="width:16%"><col style="width:30%"></colgroup>
         <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
@@ -1675,6 +1674,11 @@ https://…"></textarea></div>
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(unpaid)}</div></div></div>
     <div class="table-wrap"><table><thead><tr><th>Nội dung / Dự án</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th></tr></thead>
     <tbody>${payRows || `<tr><td colspan="4" class="empty">Chưa có khoản lương.</td></tr>`}</tbody></table></div>`;
+  // Chèn khối file dưới mỗi thẻ dự án (chỉ áp cho các dự án mình có tham gia)
+  for (const g of groups) {
+    const card = document.querySelector(`[data-mtcard="${g.p.id}"]`);
+    if (card) await renderProjectFiles(g.p, card);
+  }
   on("[data-mtdone]", "click", async (e) => {
     const { error } = await sb.from("biz_tasks").update({ status: "review", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.mtdone);
     if (error) return toast("Lỗi: " + error.message, "err");
@@ -1763,7 +1767,7 @@ async function guestProjects() {
     return `<div class="card" data-gpcard="${p.id}">
       <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>${esc(p.name)}</b>
-        ${p.drive_url ? `<a class="btn sm" target="_blank" rel="noopener" href="${esc(p.drive_url)}">📁 Thư mục tài liệu (Drive)</a>` : `<span class="meta">Chưa có link Drive.</span>`}</div>
+</div>
       ${assignBlock}
       <h3 style="font-size:14px;margin:14px 0 2px">Thông báo tiến độ</h3>
       ${pgrows || `<p class="meta" style="margin:6px 0 0">Chưa có báo cáo tiến độ.</p>`}
