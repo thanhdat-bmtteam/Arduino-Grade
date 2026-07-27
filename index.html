@@ -1497,7 +1497,7 @@ async function renderProjectFiles(p, body) {
     e.preventDefault();
     const f = list.find((x) => x.id === e.currentTarget.dataset.fdel); if (!f) return;
     if (!confirm(`Xoá tệp "${f.file_name}"?`)) return;
-    await sb.storage.from("project-files").remove([f.storage_path]);
+    await sb.storage.from("Documents BMT").remove([f.storage_path]);
     const { error } = await sb.from("biz_files").delete().eq("id", f.id);
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã xoá", "ok"); refreshFileHost(p);
@@ -1518,13 +1518,13 @@ async function renderProjectFiles(p, body) {
 async function uploadProjectFile(p, file) {
   const safe = file.name.replace(/[^\w.\-]/g, "_");
   const path = `projects/${p.id}/${Date.now()}_${safe}`;
-  const { error: upErr } = await sb.storage.from("project-files").upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
+  const { error: upErr } = await sb.storage.from("Documents BMT").upload(path, file, { cacheControl: "3600", upsert: false, contentType: file.type || undefined });
   if (upErr) throw upErr;
   const { error: dbErr } = await sb.from("biz_files").insert({ project_id: p.id, storage_path: path, file_name: file.name, file_size: file.size, mime: file.type || "", uploaded_by: state.profile.id });
-  if (dbErr) { await sb.storage.from("project-files").remove([path]); throw dbErr; }
+  if (dbErr) { await sb.storage.from("Documents BMT").remove([path]); throw dbErr; }
 }
 async function downloadProjectFile(f) {
-  const { data, error } = await sb.storage.from("project-files").createSignedUrl(f.storage_path, 300, { download: f.file_name });
+  const { data, error } = await sb.storage.from("Documents BMT").createSignedUrl(f.storage_path, 300, { download: f.file_name });
   if (error) return toast("Lỗi tải: " + error.message, "err");
   const a = document.createElement("a"); a.href = data.signedUrl; a.download = f.file_name;
   document.body.appendChild(a); a.click(); a.remove();
