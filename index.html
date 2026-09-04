@@ -612,88 +612,600 @@ async function leaderAttendance() {
 async function bizAttendance() {
   bcontent().innerHTML = loadingHTML();
   const rates = await getAttRates();
-  const [{ data: rows, error }, { data: leaders }] = await Promise.all([
-    sb.from("biz_attendance").select("*").order("work_date", { ascending: false }).order("created_at", { ascending: false }),
-    sb.from("profiles").select("id,full_name,email,bank_account,bank_code,role").eq("role", "leader"),
+
+  // Lấy chấm công + Leader + Nhân viên
+  const [
+    { data: rows, error },
+    { data: leaders, error: leaderError },
+    { data: employees, error: empError }
+  ] = await Promise.all([
+    sb.from("biz_attendance")
+      .select("*")
+      .order("work_date", { ascending: false })
+      .order("created_at", { ascending: false }),
+
+    // Không lấy bank_account, bank_code từ profiles nữa
+    sb.from("profiles")
+      .select("id,full_name,email,biz_employee_id,role")
+      .eq("role", "leader"),
+
+    // STK + ngân hàng lấy từ Nhân viên
+    sb.from("biz_employees")
+      .select("id,name,bank_account,bank_code")
   ]);
-  if (error) { bcontent().innerHTML = `<div class="empty">Lỗi: ${esc(error.message)}</div>`; return; }
+
+  if (error) {
+    bcontent().innerHTML =
+      `<div class="empty">Lỗi tải chấm công: ${esc(error.message)}</div>`;
+    return;
+  }
+
+  if (leaderError) {
+    bcontent().innerHTML =
+      `<div class="empty">Lỗi tải Leader: ${esc(leaderError.message)}</div>`;
+    return;
+  }
+
+  if (empError) {
+    bcontent().innerHTML =
+      `<div class="empty">Lỗi tải nhân viên: ${esc(empError.message)}</div>`;
+    return;
+  }
+
   const list = rows || [];
-  const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l);
+
+  // Chuẩn hoá tên để so sánh dự phòng
+  const normName = (s) =>
+    removeVN(String(s || ""))
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, " ");
+
+  // ============================================================
+  // Ghép Leader với Nhân viên để lấy STK
+  // Ưu tiên:
+  // 1. profiles.biz_employee_id == biz_employees.id
+  // 2. Nếu chưa liên kết thì thử khớp theo tên
+  // ============================================================
+  const leaderById = {};
+
+  (leaders || []).forEach((l) => {
+    let emp = null;
+
+    // Ưu tiên liên kết ID
+    if (l.biz_employee_id) {
+      emp = (employees || []).find(
+        (e) => String(e.id) === String(l.biz_employee_id)
+      );
+    }
+
+    // Dự phòng khớp tên
+    if (!emp) {
+      emp = (employees || []).find(
+        (e) => normName(e.name) === normName(l.full_name)
+      );
+    }
+
+    leaderById[l.id] = {
+      ...l,
+
+      employee_id: emp ? emp.id : null,
+
+      bank_account:
+        emp && emp.bank_account
+          ? emp.bank_account
+          : "",
+
+      bank_code:
+        emp && emp.bank_code
+          ? emp.bank_code
+          : ""
+    };
+  });
+
+  // ===========================
   // Filter
-  const monthOpts = [...new Set(list.map((x) => (x.work_date || "").slice(0, 7)))].sort().reverse();
-  const currentMonth = state.params.att_month || monthOpts[0] || new Date().toISOString().slice(0, 7);
+  // ===========================
+  const monthOpts = [
+    ...new Set(
+      list.map((x) => (x.work_date || "").slice(0, 7))
+    )
+  ].sort().reverse();
+
+  const currentMonth =
+    state.params.att_month ||
+    monthOpts[0] ||
+    new Date().toISOString().slice(0, 7);
+
   const filterLeader = state.params.att_leader || "";
   const filterStatus = state.params.att_status || "";
-  const filtered = list.filter((x) => (!currentMonth || (x.work_date || "").slice(0, 7) === currentMonth)
-    && (!filterLeader || x.leader_id === filterLeader)
-    && (!filterStatus || x.status === filterStatus));
-  const pendingCnt = list.filter((x) => x.status === "pending").length;
-  // Nhóm theo leader trong tháng đã lọc
+
+  const filtered = list.filter((x) =>
+    (!currentMonth ||
+      (x.work_date || "").slice(0, 7) === currentMonth) &&
+    (!filterLeader || x.leader_id === filterLeader) &&
+    (!filterStatus || x.status === filterStatus)
+  );
+
+  const pendingCnt = list.filter(
+    (x) => x.status === "pending"
+  ).length;
+
+  // ===========================
+  // Nhóm theo Leader
+  // ===========================
   const byLeader = {};
-  filtered.forEach((x) => { (byLeader[x.leader_id] = byLeader[x.leader_id] || []).push(x); });
+
+  filtered.forEach((x) => {
+    (byLeader[x.leader_id] =
+      byLeader[x.leader_id] || []).push(x);
+  });
+
+  // ===========================
+  // Render
+  // ===========================
   bcontent().innerHTML = `
-    <div class="pill-row" style="align-items:center;gap:6px;flex-wrap:wrap">
-      <select id="att-month" style="max-width:140px">${monthOpts.map((m) => `<option value="${m}" ${m === currentMonth ? "selected" : ""}>Tháng ${m.split("-").reverse().join("/")}</option>`).join("") || `<option>—</option>`}</select>
-      <select id="att-leader" style="max-width:220px"><option value="">Tất cả Leader</option>${(leaders || []).map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select>
-      <select id="att-status" style="max-width:150px"><option value="">Mọi trạng thái</option>
-        <option value="pending" ${filterStatus === "pending" ? "selected" : ""}>Chờ duyệt${pendingCnt ? ` (${pendingCnt})` : ""}</option>
-        <option value="approved" ${filterStatus === "approved" ? "selected" : ""}>Đã duyệt</option>
-        <option value="rejected" ${filterStatus === "rejected" ? "selected" : ""}>Từ chối</option></select>
-      <button class="btn secondary sm" id="att-rates">⚙ Đơn giá phụ cấp</button></div>
-    <p class="meta" style="margin:6px 0 8px">Đơn giá hiện tại: Xe cá nhân <b>${fmtVND(rates.ca_nhan)}/ngày</b> · Xe ôm <b>${fmtVND(rates.xe_om)}/ngày</b>. Chỉ tính 1 ngày công khi thời gian làm ≥ 2h.</p>
-    <div id="att-list">${
-      Object.keys(byLeader).length
+    <div class="pill-row"
+         style="align-items:center;gap:6px;flex-wrap:wrap">
+
+      <select id="att-month" style="max-width:140px">
+        ${
+          monthOpts.map((m) => `
+            <option value="${m}"
+              ${m === currentMonth ? "selected" : ""}>
+              Tháng ${m.split("-").reverse().join("/")}
+            </option>
+          `).join("") || `<option>—</option>`
+        }
+      </select>
+
+      <select id="att-leader" style="max-width:220px">
+        <option value="">Tất cả Leader</option>
+
+        ${(leaders || []).map((l) => `
+          <option value="${l.id}"
+            ${l.id === filterLeader ? "selected" : ""}>
+            ${esc(l.full_name)}
+          </option>
+        `).join("")}
+
+      </select>
+
+      <select id="att-status" style="max-width:150px">
+        <option value="">Mọi trạng thái</option>
+
+        <option value="pending"
+          ${filterStatus === "pending" ? "selected" : ""}>
+          Chờ duyệt${pendingCnt ? ` (${pendingCnt})` : ""}
+        </option>
+
+        <option value="approved"
+          ${filterStatus === "approved" ? "selected" : ""}>
+          Đã duyệt
+        </option>
+
+        <option value="rejected"
+          ${filterStatus === "rejected" ? "selected" : ""}>
+          Từ chối
+        </option>
+      </select>
+
+      <button class="btn secondary sm" id="att-rates">
+        ⚙ Đơn giá phụ cấp
+      </button>
+    </div>
+
+    <p class="meta" style="margin:6px 0 8px">
+      Đơn giá hiện tại:
+      Xe cá nhân <b>${fmtVND(rates.ca_nhan)}/ngày</b> ·
+      Xe ôm <b>${fmtVND(rates.xe_om)}/ngày</b>.
+      Chỉ tính 1 ngày công khi thời gian làm ≥ 2h.
+    </p>
+
+    <div id="att-list">
+      ${
+        Object.keys(byLeader).length
+
         ? Object.keys(byLeader).map((lid) => {
-          const l = leaderById[lid]; const its = byLeader[lid];
-          const approved = its.filter((x) => x.status === "approved");
-          const nCn = approved.filter((x) => x.transport === "ca_nhan").length, nXo = approved.filter((x) => x.transport === "xe_om").length;
-          const money = nCn * rates.ca_nhan + nXo * rates.xe_om;
-          const unpaidMoney = approved.filter((x) => !x.paid).reduce((s, x) => s + (x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om), 0);
-          const trows = its.map((x) => `<tr>
-            <td>${fmtDate(x.work_date)}</td>
-            <td>${x.start_time.slice(0, 5)}–${x.end_time.slice(0, 5)} <span class="meta">(${attDuration(x.start_time, x.end_time).toFixed(1)}h)</span></td>
-            <td>${transportLabel(x.transport)}</td>
-            <td>${attStatusBadge(x.status)}${x.status === "approved" && x.paid ? ' <span class="badge green">Đã CK</span>' : ""}</td>
-            <td>${esc(x.note || "")}${x.admin_note ? `<div class="meta">💬 ${esc(x.admin_note)}</div>` : ""}</td>
-            <td style="white-space:nowrap">
-              ${x.status === "pending" ? `<button class="btn success sm" data-attapprove="${x.id}">✓ Duyệt</button><button class="btn danger sm" data-attreject="${x.id}">Từ chối</button>` : ""}
-              ${x.status !== "pending" ? `<button class="btn ghost sm" data-attreopen="${x.id}">Mở lại</button>` : ""}
-            </td></tr>`).join("");
-          return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-              <b>${esc(l ? l.full_name : "(?)")}</b>
-              <span class="meta">Đã duyệt: <b>${approved.length}</b> ngày (${nCn} cá nhân + ${nXo} xe ôm) · Phụ cấp: <b>${fmtVND(money)}</b>${unpaidMoney > 0 ? ` · <b style="color:var(--amber)">Chưa CK: ${fmtVND(unpaidMoney)}</b>` : ""}
-                ${l && l.bank_account && l.bank_code && unpaidMoney > 0 ? `<button class="btn sm" data-attqr="${l.id}" data-month="${currentMonth}" style="margin-left:6px">💰 QR trả phụ cấp</button>` : ""}</span></div>
-            <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-              <colgroup><col style="width:12%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:22%"><col style="width:16%"></colgroup>
-              <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Ghi chú</th><th></th></tr></thead>
-              <tbody>${trows}</tbody></table></div></div>`;
+
+          const l = leaderById[lid];
+          const its = byLeader[lid];
+
+          const approved = its.filter(
+            (x) => x.status === "approved"
+          );
+
+          const nCn = approved.filter(
+            (x) => x.transport === "ca_nhan"
+          ).length;
+
+          const nXo = approved.filter(
+            (x) => x.transport === "xe_om"
+          ).length;
+
+          const money =
+            nCn * rates.ca_nhan +
+            nXo * rates.xe_om;
+
+          const unpaidMoney = approved
+            .filter((x) => !x.paid)
+            .reduce(
+              (s, x) =>
+                s +
+                (
+                  x.transport === "ca_nhan"
+                    ? rates.ca_nhan
+                    : rates.xe_om
+                ),
+              0
+            );
+
+          const trows = its.map((x) => `
+            <tr>
+
+              <td>
+                ${fmtDate(x.work_date)}
+              </td>
+
+              <td>
+                ${x.start_time.slice(0, 5)}
+                –
+                ${x.end_time.slice(0, 5)}
+
+                <span class="meta">
+                  (${attDuration(
+                    x.start_time,
+                    x.end_time
+                  ).toFixed(1)}h)
+                </span>
+              </td>
+
+              <td>
+                ${transportLabel(x.transport)}
+              </td>
+
+              <td>
+                ${attStatusBadge(x.status)}
+
+                ${
+                  x.status === "approved" && x.paid
+                    ? ' <span class="badge green">Đã CK</span>'
+                    : ""
+                }
+              </td>
+
+              <td>
+                ${esc(x.note || "")}
+
+                ${
+                  x.admin_note
+                    ? `<div class="meta">
+                         💬 ${esc(x.admin_note)}
+                       </div>`
+                    : ""
+                }
+              </td>
+
+              <td style="white-space:nowrap">
+
+                ${
+                  x.status === "pending"
+                    ? `
+                      <button
+                        class="btn success sm"
+                        data-attapprove="${x.id}">
+                        ✓ Duyệt
+                      </button>
+
+                      <button
+                        class="btn danger sm"
+                        data-attreject="${x.id}">
+                        Từ chối
+                      </button>
+                    `
+                    : ""
+                }
+
+                ${
+                  x.status !== "pending"
+                    ? `
+                      <button
+                        class="btn ghost sm"
+                        data-attreopen="${x.id}">
+                        Mở lại
+                      </button>
+                    `
+                    : ""
+                }
+
+              </td>
+
+            </tr>
+          `).join("");
+
+          return `
+            <div class="card">
+
+              <div style="
+                display:flex;
+                justify-content:space-between;
+                align-items:baseline;
+                flex-wrap:wrap;
+                gap:8px;
+              ">
+
+                <b>
+                  ${esc(l ? l.full_name : "(?)")}
+                </b>
+
+                <span class="meta">
+
+                  Đã duyệt:
+                  <b>${approved.length}</b> ngày
+                  (${nCn} cá nhân + ${nXo} xe ôm)
+
+                  · Phụ cấp:
+                  <b>${fmtVND(money)}</b>
+
+                  ${
+                    unpaidMoney > 0
+                      ? `
+                        ·
+                        <b style="color:var(--amber)">
+                          Chưa CK:
+                          ${fmtVND(unpaidMoney)}
+                        </b>
+                      `
+                      : ""
+                  }
+
+                  ${
+                    l &&
+                    l.bank_account &&
+                    l.bank_code &&
+                    unpaidMoney > 0
+
+                    ? `
+                      <button
+                        class="btn sm"
+                        data-attqr="${l.id}"
+                        data-month="${currentMonth}"
+                        style="margin-left:6px">
+                        💰 QR trả phụ cấp
+                      </button>
+                    `
+
+                    : unpaidMoney > 0
+                      ? `
+                        <span
+                          class="badge amber"
+                          style="margin-left:6px">
+                          Chưa có STK
+                        </span>
+                      `
+                      : ""
+                  }
+
+                </span>
+
+              </div>
+
+              <div
+                class="table-wrap"
+                style="margin-top:8px">
+
+                <table
+                  style="
+                    table-layout:fixed;
+                    width:100%
+                  ">
+
+                  <colgroup>
+                    <col style="width:12%">
+                    <col style="width:18%">
+                    <col style="width:16%">
+                    <col style="width:16%">
+                    <col style="width:22%">
+                    <col style="width:16%">
+                  </colgroup>
+
+                  <thead>
+                    <tr>
+                      <th>Ngày</th>
+                      <th>Giờ</th>
+                      <th>Phương tiện</th>
+                      <th>Trạng thái</th>
+                      <th>Ghi chú</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    ${trows}
+                  </tbody>
+
+                </table>
+
+              </div>
+
+            </div>
+          `;
         }).join("")
-        : `<div class="empty"><div class="em">🕒</div><p>Không có khai báo nào trong bộ lọc này.</p></div>`}</div>`;
-  const chgFilter = (k, v) => go("biz-home", { btab: "attendance", att_month: k === "att_month" ? v : currentMonth, att_leader: k === "att_leader" ? v : filterLeader, att_status: k === "att_status" ? v : filterStatus });
-  document.getElementById("att-month").onchange = (e) => chgFilter("att_month", e.target.value);
-  document.getElementById("att-leader").onchange = (e) => chgFilter("att_leader", e.target.value);
-  document.getElementById("att-status").onchange = (e) => chgFilter("att_status", e.target.value);
-  document.getElementById("att-rates").onclick = () => openAttRatesModal(rates);
+
+        : `
+          <div class="empty">
+            <div class="em">🕒</div>
+            <p>
+              Không có khai báo nào trong bộ lọc này.
+            </p>
+          </div>
+        `
+      }
+    </div>
+  `;
+
+  // ===========================
+  // Filter events
+  // ===========================
+  const chgFilter = (k, v) => go(
+    "biz-home",
+    {
+      btab: "attendance",
+
+      att_month:
+        k === "att_month"
+          ? v
+          : currentMonth,
+
+      att_leader:
+        k === "att_leader"
+          ? v
+          : filterLeader,
+
+      att_status:
+        k === "att_status"
+          ? v
+          : filterStatus
+    }
+  );
+
+  document.getElementById("att-month").onchange =
+    (e) =>
+      chgFilter(
+        "att_month",
+        e.target.value
+      );
+
+  document.getElementById("att-leader").onchange =
+    (e) =>
+      chgFilter(
+        "att_leader",
+        e.target.value
+      );
+
+  document.getElementById("att-status").onchange =
+    (e) =>
+      chgFilter(
+        "att_status",
+        e.target.value
+      );
+
+  document.getElementById("att-rates").onclick =
+    () => openAttRatesModal(rates);
+
+  // ===========================
+  // DUYỆT
+  // ===========================
   on("[data-attapprove]", "click", async (e) => {
-    const { error } = await sb.from("biz_attendance").update({ status: "approved", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attapprove);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã duyệt", "ok"); bizAttendance();
-  }, bcontent());
-  on("[data-attreject]", "click", async (e) => {
-    const note = prompt("Ghi chú từ chối (Leader sẽ thấy):", "");
-    if (note === null) return;
-    const { error } = await sb.from("biz_attendance").update({ status: "rejected", admin_note: note, updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attreject);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã từ chối", "ok"); bizAttendance();
-  }, bcontent());
-  on("[data-attreopen]", "click", async (e) => {
-    const { error } = await sb.from("biz_attendance").update({ status: "pending", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attreopen);
-    if (error) return toast("Lỗi: " + error.message, "err");
+
+    const { error } =
+      await sb
+        .from("biz_attendance")
+        .update({
+          status: "approved",
+          admin_note: "",
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq(
+          "id",
+          e.currentTarget.dataset.attapprove
+        );
+
+    if (error)
+      return toast(
+        "Lỗi: " + error.message,
+        "err"
+      );
+
+    toast("Đã duyệt", "ok");
     bizAttendance();
+
   }, bcontent());
+
+  // ===========================
+  // TỪ CHỐI
+  // ===========================
+  on("[data-attreject]", "click", async (e) => {
+
+    const note = prompt(
+      "Ghi chú từ chối (Leader sẽ thấy):",
+      ""
+    );
+
+    if (note === null)
+      return;
+
+    const { error } =
+      await sb
+        .from("biz_attendance")
+        .update({
+          status: "rejected",
+          admin_note: note,
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq(
+          "id",
+          e.currentTarget.dataset.attreject
+        );
+
+    if (error)
+      return toast(
+        "Lỗi: " + error.message,
+        "err"
+      );
+
+    toast("Đã từ chối", "ok");
+    bizAttendance();
+
+  }, bcontent());
+
+  // ===========================
+  // MỞ LẠI
+  // ===========================
+  on("[data-attreopen]", "click", async (e) => {
+
+    const { error } =
+      await sb
+        .from("biz_attendance")
+        .update({
+          status: "pending",
+          admin_note: "",
+          updated_at:
+            new Date().toISOString()
+        })
+        .eq(
+          "id",
+          e.currentTarget.dataset.attreopen
+        );
+
+    if (error)
+      return toast(
+        "Lỗi: " + error.message,
+        "err"
+      );
+
+    bizAttendance();
+
+  }, bcontent());
+
+  // ===========================
+  // QR TRẢ PHỤ CẤP
+  // ===========================
   on("[data-attqr]", "click", (e) => {
-    const l = leaderById[e.currentTarget.dataset.attqr];
-    showAttPayQR(l, e.currentTarget.dataset.month, rates);
+
+    const l =
+      leaderById[
+        e.currentTarget.dataset.attqr
+      ];
+
+    showAttPayQR(
+      l,
+      e.currentTarget.dataset.month,
+      rates
+    );
+
   }, bcontent());
 }
 
