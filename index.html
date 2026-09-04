@@ -496,17 +496,274 @@ function bizHome() {
   const tab = state.params.btab || "invoices";
   const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["stock", "Kho"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
   if (r === "admin") tabs.push(["notify", "Thông báo"]);
+  if (r === "admin") tabs.push(["attendance", "Chấm công"]);
   setContent(`
     <div class="section-title"><h2>Quản lý</h2></div>
     <div class="tabbar">${tabs.map(([k, l]) => `<button data-btab="${k}" class="${tab === k ? "active" : ""}">${esc(l)}${k === "notify" ? ' <span id="notify-badge"></span>' : ""}</button>`).join("")}</div>
     <div id="bcontent">${loadingHTML()}</div>`);
   on("[data-btab]", "click", (e) => go("biz-home", { btab: e.currentTarget.dataset.btab }), content());
-  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees, notify: bizNotify }[tab] || bizInvoices)();
+  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees, notify: bizNotify, attendance: bizAttendance }[tab] || bizInvoices)();
   if (r === "admin") (async () => {
     const { count } = await sb.from("biz_tasks").select("id", { count: "exact", head: true }).eq("status", "review");
     const el = document.getElementById("notify-badge");
     if (el && count > 0) el.innerHTML = `<span class="badge red" style="margin-left:2px">${count}</span>`;
   })();
+}
+
+/* ---------- Chấm công ---------- */
+const ATT_RATES_DEFAULT = { ca_nhan: 30000, xe_om: 40000 };
+const transportLabel = (t) => t === "ca_nhan" ? "Xe cá nhân" : t === "xe_om" ? "Xe ôm công nghệ" : t;
+function attDuration(start, end) { // giờ (thập phân); trả về NaN nếu không hợp lệ
+  if (!start || !end) return NaN;
+  const [sh, sm] = start.split(":").map(Number), [eh, em] = end.split(":").map(Number);
+  const s = sh * 60 + sm, e = eh * 60 + em; if (e <= s) return NaN;
+  return (e - s) / 60;
+}
+async function getAttRates() {
+  const { data } = await sb.from("biz_settings").select("value").eq("key", "att_rates").maybeSingle();
+  return (data && data.value) || ATT_RATES_DEFAULT;
+}
+function attStatusBadge(s) {
+  return s === "approved" ? '<span class="badge green">Đã duyệt</span>'
+    : s === "rejected" ? '<span class="badge red">Từ chối</span>'
+    : '<span class="badge amber">Chờ duyệt</span>';
+}
+
+// ==== Trang của Leader: khai báo + xem công của mình ====
+async function leaderAttendance() {
+  const r = state.profile.role;
+  if (r !== "leader" && r !== "admin") { routeDefault(); return; }
+  setContent(`<div class="section-title"><h2>Chấm công</h2></div><div id="att-body">${loadingHTML()}</div>`);
+  const me = state.profile.id;
+  const rates = await getAttRates();
+  const { data: rows } = await sb.from("biz_attendance").select("*").eq("leader_id", me).order("work_date", { ascending: false }).order("start_time", { ascending: false });
+  const list = rows || [];
+  // Gom theo tháng
+  const byMonth = {};
+  list.forEach((x) => { const k = (x.work_date || "").slice(0, 7); (byMonth[k] = byMonth[k] || []).push(x); });
+  const months = Object.keys(byMonth).sort().reverse();
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const today = new Date().toISOString().slice(0, 10);
+  const monthCards = months.map((m) => {
+    const items = byMonth[m];
+    const approved = items.filter((x) => x.status === "approved");
+    const nCaNhan = approved.filter((x) => x.transport === "ca_nhan").length;
+    const nXeOm = approved.filter((x) => x.transport === "xe_om").length;
+    const totalMoney = nCaNhan * rates.ca_nhan + nXeOm * rates.xe_om;
+    const paidMoney = approved.filter((x) => x.paid).reduce((s, x) => s + (x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om), 0);
+    const unpaidMoney = totalMoney - paidMoney;
+    const trows = items.map((x) => `<tr>
+      <td>${fmtDate(x.work_date)}</td>
+      <td>${x.start_time.slice(0, 5)} – ${x.end_time.slice(0, 5)}</td>
+      <td>${transportLabel(x.transport)}</td>
+      <td>${attStatusBadge(x.status)}${x.status === "approved" && x.paid ? ' <span class="badge green">Đã CK</span>' : ""}</td>
+      <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td>
+      <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`).join("");
+    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+        <b>Tháng ${m.split("-").reverse().join("/")}</b>
+        <span class="meta">Ngày công đã duyệt: <b>${approved.length}</b> (${nCaNhan} xe cá nhân + ${nXeOm} xe ôm) · Phụ cấp: <b>${fmtVND(totalMoney)}</b> (đã CK: ${fmtVND(paidMoney)}${unpaidMoney > 0 ? ", chưa CK: " + fmtVND(unpaidMoney) : ""})</span></div>
+      <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
+        <colgroup><col style="width:14%"><col style="width:18%"><col style="width:20%"><col style="width:16%"><col style="width:24%"><col style="width:8%"></colgroup>
+        <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Ghi chú Admin</th><th></th></tr></thead>
+        <tbody>${trows}</tbody></table></div></div>`;
+  }).join("");
+  document.getElementById("att-body").innerHTML = `
+    <div class="card">
+      <b>Khai báo ngày công</b>
+      <p class="meta" style="margin:4px 0 8px">Thời gian làm phải <b>≥ 2 giờ</b> mới được tính 1 ngày công. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>.</p>
+      <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
+        <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="att-date" type="date" max="${today}" value="${today}"/></div>
+        <div class="field" style="max-width:110px;margin:0"><label>Giờ bắt đầu</label><input id="att-start" type="time" value="08:00"/></div>
+        <div class="field" style="max-width:110px;margin:0"><label>Giờ kết thúc</label><input id="att-end" type="time" value="11:00"/></div>
+        <div class="field" style="max-width:180px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
+        <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm đó"/></div>
+        <button class="btn" id="att-submit" type="button">Gửi</button></div>
+      <p id="att-hint" class="meta" style="margin:6px 0 0"></p>
+    </div>
+    ${monthCards || `<div class="empty"><div class="em">🕒</div><p>Chưa có ngày công nào.</p></div>`}`;
+  const startEl = document.getElementById("att-start"), endEl = document.getElementById("att-end"), hint = document.getElementById("att-hint");
+  const updHint = () => {
+    const h = attDuration(startEl.value, endEl.value);
+    if (Number.isNaN(h)) hint.innerHTML = '<span style="color:var(--red)">Giờ kết thúc phải sau giờ bắt đầu.</span>';
+    else if (h < 2) hint.innerHTML = `<span style="color:var(--red)">Chỉ ${h.toFixed(1)}h — cần ≥ 2h mới được tính công.</span>`;
+    else hint.innerHTML = `<span class="meta">Thời gian làm: <b>${h.toFixed(1)}h</b> — hợp lệ.</span>`;
+  };
+  startEl.oninput = updHint; endEl.oninput = updHint; updHint();
+  document.getElementById("att-submit").onclick = async (e) => {
+    const date = document.getElementById("att-date").value;
+    const start = startEl.value, end = endEl.value;
+    const h = attDuration(start, end);
+    if (!date || Number.isNaN(h)) return toast("Kiểm tra lại ngày/giờ", "err");
+    if (h < 2) return toast("Thời gian làm phải ≥ 2 giờ mới tính công", "err");
+    e.target.disabled = true;
+    const { error } = await sb.from("biz_attendance").insert({ leader_id: me, work_date: date, start_time: start, end_time: end, transport: document.getElementById("att-transport").value, note: document.getElementById("att-note").value.trim() });
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast("Đã gửi. Chờ Admin duyệt.", "ok"); leaderAttendance();
+  };
+  on("[data-attdel]", "click", async (e) => {
+    if (!confirm("Xoá khai báo này?")) return;
+    const { error } = await sb.from("biz_attendance").delete().eq("id", e.currentTarget.dataset.attdel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã xoá", "ok"); leaderAttendance();
+  });
+}
+
+// ==== Tab Chấm công của Admin ====
+async function bizAttendance() {
+  bcontent().innerHTML = loadingHTML();
+  const rates = await getAttRates();
+  const [{ data: rows, error }, { data: leaders }] = await Promise.all([
+    sb.from("biz_attendance").select("*").order("work_date", { ascending: false }).order("created_at", { ascending: false }),
+    sb.from("profiles").select("id,full_name,email,bank_account,bank_code").eq("role", "leader"),
+  ]);
+  if (error) { bcontent().innerHTML = `<div class="empty">Lỗi: ${esc(error.message)}</div>`; return; }
+  const list = rows || [];
+  const leaderById = {}; (leaders || []).forEach((l) => leaderById[l.id] = l);
+  // Filter
+  const monthOpts = [...new Set(list.map((x) => (x.work_date || "").slice(0, 7)))].sort().reverse();
+  const currentMonth = state.params.att_month || monthOpts[0] || new Date().toISOString().slice(0, 7);
+  const filterLeader = state.params.att_leader || "";
+  const filterStatus = state.params.att_status || "";
+  const filtered = list.filter((x) => (!currentMonth || (x.work_date || "").slice(0, 7) === currentMonth)
+    && (!filterLeader || x.leader_id === filterLeader)
+    && (!filterStatus || x.status === filterStatus));
+  const pendingCnt = list.filter((x) => x.status === "pending").length;
+  // Nhóm theo leader trong tháng đã lọc
+  const byLeader = {};
+  filtered.forEach((x) => { (byLeader[x.leader_id] = byLeader[x.leader_id] || []).push(x); });
+  bcontent().innerHTML = `
+    <div class="pill-row" style="align-items:center;gap:6px;flex-wrap:wrap">
+      <select id="att-month" style="max-width:140px">${monthOpts.map((m) => `<option value="${m}" ${m === currentMonth ? "selected" : ""}>Tháng ${m.split("-").reverse().join("/")}</option>`).join("") || `<option>—</option>`}</select>
+      <select id="att-leader" style="max-width:220px"><option value="">Tất cả Leader</option>${(leaders || []).map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`).join("")}</select>
+      <select id="att-status" style="max-width:150px"><option value="">Mọi trạng thái</option>
+        <option value="pending" ${filterStatus === "pending" ? "selected" : ""}>Chờ duyệt${pendingCnt ? ` (${pendingCnt})` : ""}</option>
+        <option value="approved" ${filterStatus === "approved" ? "selected" : ""}>Đã duyệt</option>
+        <option value="rejected" ${filterStatus === "rejected" ? "selected" : ""}>Từ chối</option></select>
+      <button class="btn secondary sm" id="att-rates">⚙ Đơn giá phụ cấp</button></div>
+    <p class="meta" style="margin:6px 0 8px">Đơn giá hiện tại: Xe cá nhân <b>${fmtVND(rates.ca_nhan)}/ngày</b> · Xe ôm <b>${fmtVND(rates.xe_om)}/ngày</b>. Chỉ tính 1 ngày công khi thời gian làm ≥ 2h.</p>
+    <div id="att-list">${
+      Object.keys(byLeader).length
+        ? Object.keys(byLeader).map((lid) => {
+          const l = leaderById[lid]; const its = byLeader[lid];
+          const approved = its.filter((x) => x.status === "approved");
+          const nCn = approved.filter((x) => x.transport === "ca_nhan").length, nXo = approved.filter((x) => x.transport === "xe_om").length;
+          const money = nCn * rates.ca_nhan + nXo * rates.xe_om;
+          const unpaidMoney = approved.filter((x) => !x.paid).reduce((s, x) => s + (x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om), 0);
+          const trows = its.map((x) => `<tr>
+            <td>${fmtDate(x.work_date)}</td>
+            <td>${x.start_time.slice(0, 5)}–${x.end_time.slice(0, 5)} <span class="meta">(${attDuration(x.start_time, x.end_time).toFixed(1)}h)</span></td>
+            <td>${transportLabel(x.transport)}</td>
+            <td>${attStatusBadge(x.status)}${x.status === "approved" && x.paid ? ' <span class="badge green">Đã CK</span>' : ""}</td>
+            <td>${esc(x.note || "")}${x.admin_note ? `<div class="meta">💬 ${esc(x.admin_note)}</div>` : ""}</td>
+            <td style="white-space:nowrap">
+              ${x.status === "pending" ? `<button class="btn success sm" data-attapprove="${x.id}">✓ Duyệt</button><button class="btn danger sm" data-attreject="${x.id}">Từ chối</button>` : ""}
+              ${x.status !== "pending" ? `<button class="btn ghost sm" data-attreopen="${x.id}">Mở lại</button>` : ""}
+            </td></tr>`).join("");
+          return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+              <b>${esc(l ? l.full_name : "(?)")}</b>
+              <span class="meta">Đã duyệt: <b>${approved.length}</b> ngày (${nCn} cá nhân + ${nXo} xe ôm) · Phụ cấp: <b>${fmtVND(money)}</b>${unpaidMoney > 0 ? ` · <b style="color:var(--amber)">Chưa CK: ${fmtVND(unpaidMoney)}</b>` : ""}
+                ${l && l.bank_account && l.bank_code && unpaidMoney > 0 ? `<button class="btn sm" data-attqr="${l.id}" data-month="${currentMonth}" style="margin-left:6px">💰 QR trả phụ cấp</button>` : ""}</span></div>
+            <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
+              <colgroup><col style="width:12%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:22%"><col style="width:16%"></colgroup>
+              <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Ghi chú</th><th></th></tr></thead>
+              <tbody>${trows}</tbody></table></div></div>`;
+        }).join("")
+        : `<div class="empty"><div class="em">🕒</div><p>Không có khai báo nào trong bộ lọc này.</p></div>`}</div>`;
+  const chgFilter = (k, v) => go("biz-home", { btab: "attendance", att_month: k === "att_month" ? v : currentMonth, att_leader: k === "att_leader" ? v : filterLeader, att_status: k === "att_status" ? v : filterStatus });
+  document.getElementById("att-month").onchange = (e) => chgFilter("att_month", e.target.value);
+  document.getElementById("att-leader").onchange = (e) => chgFilter("att_leader", e.target.value);
+  document.getElementById("att-status").onchange = (e) => chgFilter("att_status", e.target.value);
+  document.getElementById("att-rates").onclick = () => openAttRatesModal(rates);
+  on("[data-attapprove]", "click", async (e) => {
+    const { error } = await sb.from("biz_attendance").update({ status: "approved", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attapprove);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã duyệt", "ok"); bizAttendance();
+  }, bcontent());
+  on("[data-attreject]", "click", async (e) => {
+    const note = prompt("Ghi chú từ chối (Leader sẽ thấy):", "");
+    if (note === null) return;
+    const { error } = await sb.from("biz_attendance").update({ status: "rejected", admin_note: note, updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attreject);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã từ chối", "ok"); bizAttendance();
+  }, bcontent());
+  on("[data-attreopen]", "click", async (e) => {
+    const { error } = await sb.from("biz_attendance").update({ status: "pending", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.attreopen);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    bizAttendance();
+  }, bcontent());
+  on("[data-attqr]", "click", (e) => {
+    const l = leaderById[e.currentTarget.dataset.attqr];
+    showAttPayQR(l, e.currentTarget.dataset.month, rates);
+  }, bcontent());
+}
+
+async function openAttRatesModal(rates) {
+  showModal("Đơn giá phụ cấp", `
+    <div class="field"><label>Xe cá nhân (đ/ngày)</label><input id="rt-ca" type="number" value="${rates.ca_nhan || 0}"/></div>
+    <div class="field"><label>Xe ôm công nghệ (đ/ngày)</label><input id="rt-xe" type="number" value="${rates.xe_om || 0}"/></div>`,
+    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="rt-save">Lưu</button>`);
+  document.getElementById("rt-save").onclick = async (e) => {
+    const val = { ca_nhan: Number(document.getElementById("rt-ca").value) || 0, xe_om: Number(document.getElementById("rt-xe").value) || 0 };
+    e.target.disabled = true;
+    const { error } = await sb.from("biz_settings").upsert({ key: "att_rates", value: val }, { onConflict: "key" });
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast("Đã lưu", "ok"); closeModal(); bizAttendance();
+  };
+}
+
+async function showAttPayQR(leader, month, rates) {
+  if (!leader || !leader.bank_account || !leader.bank_code) { toast("Leader chưa có STK/ngân hàng.", "err"); return; }
+  showModal("Trả phụ cấp — " + esc(leader.full_name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  const body = modalRoot().querySelector(".modal-body");
+  const { data: rowsUnpaid } = await sb.from("biz_attendance").select("*").eq("leader_id", leader.id).eq("status", "approved").eq("paid", false).order("work_date", { ascending: true });
+  let unpaid = rowsUnpaid || [];
+  if (month) unpaid = unpaid.filter((x) => (x.work_date || "").slice(0, 7) === month);
+  if (!unpaid.length) { body.innerHTML = `<div class="empty">Không còn ngày công nào chưa CK cho tháng này.</div>`; return; }
+  const rows = unpaid.map((x) => `<tr>
+    <td><input type="checkbox" class="attp-chk" data-id="${x.id}" data-amt="${x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om}" checked/></td>
+    <td>${fmtDate(x.work_date)}</td>
+    <td>${x.start_time.slice(0, 5)}–${x.end_time.slice(0, 5)}</td>
+    <td>${transportLabel(x.transport)}</td>
+    <td style="text-align:right"><b>${fmtVND(x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om)}</b></td></tr>`).join("");
+  body.innerHTML = `
+    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
+      <div>
+        <div class="pill-row"><button class="btn ghost sm" id="attp-all">Chọn tất cả</button><button class="btn ghost sm" id="attp-none">Bỏ chọn</button></div>
+        <div class="table-wrap"><table><thead><tr><th></th><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th style="text-align:right">Số tiền</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <p class="meta" style="margin-top:6px">Nội dung CK: <code>Phu cap thang ${month} ${esc(removeVN(leader.full_name))}</code></p>
+      </div>
+      <div style="text-align:center">
+        <div class="meta">Tổng thanh toán</div>
+        <div id="attp-sum" style="font-size:1.6rem;font-weight:800;color:var(--blue);margin-bottom:8px">0đ</div>
+        <img id="attp-qr" alt="VietQR" style="max-width:260px;width:100%;border:1px solid var(--line);border-radius:12px"/>
+        <p class="meta" style="margin-top:8px">${esc(bankLabel(leader.bank_code))} · STK: <b>${esc(leader.bank_account)}</b></p>
+        <button class="btn block" id="attp-done" style="margin-top:10px">✅ Đã CK — Đánh dấu đã trả</button>
+      </div>
+    </div>`;
+  const chks = () => [...body.querySelectorAll(".attp-chk")];
+  const picked = () => chks().filter((c) => c.checked);
+  const total = () => picked().reduce((s, c) => s + (Number(c.dataset.amt) || 0), 0);
+  const refreshQR = () => {
+    const amt = Math.max(0, Math.round(total()));
+    body.querySelector("#attp-sum").textContent = fmtVND(amt);
+    const img = body.querySelector("#attp-qr"), btn = body.querySelector("#attp-done");
+    if (amt <= 0) { img.style.display = "none"; btn.disabled = true; return; }
+    img.style.display = "block"; btn.disabled = false;
+    const info = "Phu cap thang " + month + " " + removeVN(leader.full_name);
+    img.src = `https://img.vietqr.io/image/${encodeURIComponent(leader.bank_code)}-${encodeURIComponent(leader.bank_account)}-compact2.png?amount=${amt}&addInfo=${encodeURIComponent(info)}&accountName=${encodeURIComponent(removeVN(leader.full_name))}`;
+  };
+  chks().forEach((c) => c.onchange = refreshQR);
+  body.querySelector("#attp-all").onclick = () => { chks().forEach((c) => c.checked = true); refreshQR(); };
+  body.querySelector("#attp-none").onclick = () => { chks().forEach((c) => c.checked = false); refreshQR(); };
+  refreshQR();
+  body.querySelector("#attp-done").onclick = async (ev) => {
+    const ids = picked().map((c) => c.dataset.id); if (!ids.length) return toast("Chưa chọn ngày nào", "err");
+    if (!confirm(`Xác nhận đã chuyển ${fmtVND(total())} cho ${leader.full_name}?`)) return;
+    ev.target.disabled = true;
+    const { error } = await sb.from("biz_attendance").update({ paid: true }).in("id", ids);
+    if (error) { toast("Lỗi: " + error.message, "err"); ev.target.disabled = false; return; }
+    toast("Đã đánh dấu đã trả", "ok"); closeModal(); bizAttendance();
+  };
 }
 
 /* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt ---------- */
@@ -1085,8 +1342,13 @@ async function bizProjects() {
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải dự án: ${esc(error.message)}</div>`; return; }
   const invBy = {}, invCnt = {};
   (invoices || []).forEach((iv) => { const k = (iv.project_name || "").trim(); if (k) { invBy[k] = (invBy[k] || 0) + Number(iv.total || 0); invCnt[k] = (invCnt[k] || 0) + 1; } });
-  const expBy = {}, expCnt = {};
-  (expenses || []).forEach((x) => { expBy[x.project_id] = (expBy[x.project_id] || 0) + Number(x.amount || 0); expCnt[x.project_id] = (expCnt[x.project_id] || 0) + 1; });
+  const expPaidBy = {}, expUnpaidBy = {}, expCnt = {};
+  (expenses || []).forEach((x) => {
+    const amt = Number(x.amount || 0);
+    if (x.paid) expPaidBy[x.project_id] = (expPaidBy[x.project_id] || 0) + amt;
+    else expUnpaidBy[x.project_id] = (expUnpaidBy[x.project_id] || 0) + amt;
+    expCnt[x.project_id] = (expCnt[x.project_id] || 0) + 1;
+  });
   const thuBy = {};
   (incomes || []).forEach((x) => { thuBy[x.project_id] = (thuBy[x.project_id] || 0) + Number(x.amount || 0); });
   let tQuote = 0, tThu = 0, tChi = 0;
@@ -1094,12 +1356,13 @@ async function bizProjects() {
   const cards = (projects || []).map((p) => {
     pmap[p.id] = p;
     const thu = thuBy[p.id] || 0;
-    const chi = (invBy[(p.name || "").trim()] || 0) + (expBy[p.id] || 0);
-    const ln = thu - chi;
-    tQuote += Number(p.quote || 0); tThu += thu; tChi += chi;
+    const chiDa = (invBy[(p.name || "").trim()] || 0) + (expPaidBy[p.id] || 0);
+    const chiNo = expUnpaidBy[p.id] || 0;
+    const ln = thu - chiDa;
+    tQuote += Number(p.quote || 0); tThu += thu; tChi += chiDa;
     return `<div class="card">
         <div style="font-weight:700">${esc(p.name)}</div>
-        <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
+        <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b>${chiNo > 0 ? ` · Còn nợ NV: <b style="color:var(--amber)">${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
         <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-top:10px">
           <span class="meta" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.note ? "📝 " + esc(p.note) : ""}</span>
@@ -1168,16 +1431,19 @@ async function projectDetail(p) {
   const taskNd = [...new Set(ndList.map((n) => CHI2TASK[n] || n))].filter((n) => !TASK_SKIP.has(n));
   const empNames = (emps || []).map((e) => e.name);
   const invSum = (invoices || []).reduce((s, x) => s + Number(x.total || 0), 0);
-  const expSum = (expenses || []).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const expPaidSum = (expenses || []).filter((x) => x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const expUnpaidSum = (expenses || []).filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
   const thu = (incomes || []).reduce((s, x) => s + Number(x.amount || 0), 0);
-  const chi = invSum + expSum;
+  const chiDa = invSum + expPaidSum;
+  const chiNo = expUnpaidSum;
+  const ln = thu - chiDa;
   const incRows = (incomes || []).map((x) => `<tr><td>${esc(x.payer || "")}</td><td>${fmtDate(x.income_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td><button class="btn ghost sm" data-incdel="${x.id}">✕</button></td></tr>`).join("");
   const invRows = (invoices || []).map((iv) => `<tr><td>${esc(iv.customer || "")}</td><td>${fmtDate(iv.invoice_date)}</td><td style="text-align:right">${fmtVND(iv.total)}</td></tr>`).join("");
   const expRows = (expenses || []).map((x) => `<tr><td>${esc(x.note || "")}${x.employee_name ? ` — <b>${esc(x.employee_name)}</b>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa</span>'}</td><td><button class="btn danger sm" data-expdel="${x.id}">✕</button></td></tr>`).join("");
   body.innerHTML = `
     <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button>
       <button class="btn secondary sm" id="pj-qr">💰 QR nhận tiền</button></div>
-    <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công ${fmtVND(expSum)}) · LN: <b style="color:${thu - chi < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(thu - chi)}</b></div>
+    <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công đã CK ${fmtVND(expPaidSum)})${chiNo > 0 ? ` · <b style="color:var(--amber)">Còn nợ NV: ${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
 
     <h3 style="font-size:14px;margin:14px 0 4px">Thu — khoản nhận từ khách</h3>
     <div class="table-wrap"><table><thead><tr><th>Người chuyển</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th></th></tr></thead>
@@ -1192,7 +1458,7 @@ async function projectDetail(p) {
     <div class="table-wrap"><table><thead><tr><th>Khách</th><th>Ngày</th><th style="text-align:right">Số tiền</th></tr></thead>
     <tbody>${invRows || `<tr><td colspan="3" class="empty">Chưa có hoá đơn gắn dự án này (đặt ô "Dự án" trên hoá đơn = "${esc(p.name)}").</td></tr>`}</tbody></table></div>
 
-    <h3 style="font-size:14px;margin:16px 0 4px">Chi — trả nhân công (${fmtVND(expSum)})</h3>
+    <h3 style="font-size:14px;margin:16px 0 4px">Chi — trả nhân công (đã CK ${fmtVND(expPaidSum)}${expUnpaidSum > 0 ? " · chưa CK " + fmtVND(expUnpaidSum) : ""})</h3>
     <div class="table-wrap"><table><thead><tr><th>Nội dung — Nhân viên</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th><th></th></tr></thead>
     <tbody>${expRows || `<tr><td colspan="5" class="empty">Chưa có khoản chi nhân công.</td></tr>`}</tbody></table></div>
     <datalist id="nd-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>
@@ -2299,6 +2565,7 @@ function render() {
     "student-classes": studentClasses, "student-absence": studentAbsence, "student-grades": studentGrades,
     "biz-home": bizHome,
     "my-tasks": leaderTasks,
+    "my-att": leaderAttendance,
     "my-projects": guestProjects,
   };
   const fn = map[v];
@@ -2478,7 +2745,7 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
-  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"]];
+  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["my-att", "Chấm công", "🕒"]];
   if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
   if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
