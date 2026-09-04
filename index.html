@@ -1336,7 +1336,7 @@ async function bizProjects() {
   const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }] = await Promise.all([
     sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
     sb.from("biz_invoices").select("project_name,total"),
-    sb.from("biz_expenses").select("project_id,amount"),
+    sb.from("biz_expenses").select("project_id,amount,paid"),
     sb.from("biz_incomes").select("project_id,amount"),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải dự án: ${esc(error.message)}</div>`; return; }
