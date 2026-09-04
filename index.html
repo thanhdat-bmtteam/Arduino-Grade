@@ -614,7 +614,7 @@ async function bizAttendance() {
   const rates = await getAttRates();
   const [{ data: rows, error }, { data: leaders }] = await Promise.all([
     sb.from("biz_attendance").select("*").order("work_date", { ascending: false }).order("created_at", { ascending: false }),
-    sb.from("profiles").select("id,full_name,email,bank_account,bank_code").eq("role", "leader"),
+    sb.from("profiles").select("id,full_name,email,bank_account,bank_code,role").eq("role", "leader"),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi: ${esc(error.message)}</div>`; return; }
   const list = rows || [];
@@ -1564,7 +1564,10 @@ async function projectDetail(p) {
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
-        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
+        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || [])
+  .filter(l => l.role === "leader")
+  .map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`)
+  .join("")}</select></div>
         <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
 `,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
