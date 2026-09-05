@@ -3011,16 +3011,58 @@ async function doLogout() {
   renderAuth();
 }
 /* Tạo tài khoản cho người khác mà KHÔNG đăng xuất admin:
-   dùng một client phụ (không lưu session). Yêu cầu TẮT "Confirm email". */
-async function adminCreateUser(email, password, full_name, role) {
+   dùng một client phụ (không lưu session). Yêu cầu TẮT "Confirm email".
+   opts:
+     - skipEmailCheck: bỏ qua check email đã tồn tại (dùng cho vòng retry tự tăng số)
+     - allowDuplicateName: cho phép trùng tên, không hỏi confirm */
+async function adminCreateUser(email, password, full_name, role, opts = {}) {
+  const emailLc = String(email || "").trim().toLowerCase();
+  const nameTr  = String(full_name || "").trim();
+
+  // ---- Pre-check trùng lặp trong bảng profiles ----
+  const checks = [];
+  if (!opts.skipEmailCheck && emailLc) {
+    checks.push(sb.from("profiles").select("id,full_name,email,role").eq("email", emailLc));
+  }
+  if (!opts.allowDuplicateName && nameTr) {
+    // ilike không kèm % → exact match, không phân biệt hoa thường
+    checks.push(sb.from("profiles").select("id,full_name,email,role").ilike("full_name", nameTr));
+  }
+  if (checks.length) {
+    const results = await Promise.all(checks);
+    for (const r of results) {
+      if (r.error) throw new Error("Không kiểm tra được trùng lặp: " + r.error.message);
+    }
+    const merged = results.flatMap((r) => r.data || []);
+
+    const dupEmail = merged.find((x) => (x.email || "").toLowerCase() === emailLc);
+    if (dupEmail) throw new Error(`Email đã tồn tại: ${emailLc}`);
+
+    const dupName = merged.find((x) =>
+      (x.full_name || "").trim().toLowerCase() === nameTr.toLowerCase()
+    );
+    if (dupName) {
+      const ok = confirm(
+        `Đã có tài khoản trùng tên "${nameTr}":\n` +
+        `• ${dupName.email || "(chưa có email)"} — vai trò: ${dupName.role}\n\n` +
+        `⚠ Tạo tài khoản MỚI sẽ khiến cùng 1 người có 2 hồ sơ khác nhau, ` +
+        `chấm công / lương / task bị chia đôi.\n\n` +
+        `Nếu đây thực sự là 2 người khác nhau tình cờ trùng tên → bấm OK.\n` +
+        `Nếu không → bấm Cancel và dùng tài khoản cũ.`
+      );
+      if (!ok) throw new Error("Đã huỷ tạo tài khoản do trùng tên");
+    }
+  }
+
+  // ---- Tạo user qua client phụ ----
   const tmp = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, storageKey: "eduhub-tmp" },
   });
   const { data, error } = await tmp.auth.signUp({
-    email, password, options: { data: { full_name, role } },
+    email: emailLc, password, options: { data: { full_name: nameTr, role } },
   });
-  if (error) throw error;
   await tmp.auth.signOut().catch(() => {});
+  if (error) throw error;
   return data.user;
 }
 /* Người dùng tự đổi mật khẩu của chính mình */
@@ -3591,12 +3633,28 @@ async function approveRegToAccount(reg) {
   const domain = role === "gvhd" ? "gvhd.bmt" : role === "tg" ? "tg.bmt" : STUDENT_DOMAIN;
   const roleLbl = role === "gvhd" ? "GV hướng dẫn" : role === "tg" ? "Tác giả (HS dự thi)" : "học sinh";
   if (!confirm(`Tạo tài khoản ${roleLbl} cho "${reg.full_name}"\nEmail đăng nhập: ${base}@${domain}` + (!isProj && reg.class_id ? `\nThêm vào lớp: ${reg.course_name || ""}` : "") + (isProj ? "\n(Sau khi tạo, vào Quản lý → Dự án → Chi tiết để phân công vào dự án.)" : "") + "?")) return;
+
+  // ---- Check trùng TÊN 1 lần trước khi vào vòng retry email ----
+  const { data: nameDups, error: ndErr } = await sb
+    .from("profiles").select("id,email,role")
+    .ilike("full_name", (reg.full_name || "").trim());
+  if (ndErr) return toast("Lỗi kiểm tra trùng tên: " + ndErr.message, "err");
+  if (nameDups && nameDups.length) {
+    const list = nameDups.map((d) => `• ${d.email || "(chưa có email)"} — ${d.role}`).join("\n");
+    if (!confirm(
+      `Đã có ${nameDups.length} tài khoản trùng tên "${reg.full_name}":\n${list}\n\n` +
+      `⚠ Tạo mới sẽ khiến cùng 1 người có nhiều hồ sơ, ` +
+      `chấm công / task sẽ bị chia. Vẫn tạo?`
+    )) return toast("Đã huỷ", "ok");
+  }
+
   const pass = Math.random().toString(36).slice(2, 10);
   let userId = null, email = `${base}@${domain}`, attempt = 0;
-  // Tạo tài khoản; nếu trùng email (trùng tên) thì thêm số: vantam2, vantam3...
+  // Tạo tài khoản; nếu trùng email thì thêm số: vantam2, vantam3...
   while (true) {
     try {
-      const u = await adminCreateUser(email, pass, reg.full_name, role);
+      const u = await adminCreateUser(email, pass, reg.full_name, role,
+        { skipEmailCheck: true, allowDuplicateName: true });
       userId = u && u.id; break;
     } catch (err) {
       if (/registered|already|exists/i.test(err.message || "")) {
