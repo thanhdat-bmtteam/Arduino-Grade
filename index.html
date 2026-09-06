@@ -712,10 +712,12 @@ async function bizAttendance() {
     )
   ].sort().reverse();
 
+  // Mặc định: "" = xem tất cả các tháng (tránh sót row chưa CK khi 2-3 tháng
+  // mới thanh toán 1 lần). User vẫn có thể chọn 1 tháng cụ thể trong dropdown.
   const currentMonth =
-    state.params.att_month ||
-    monthOpts[0] ||
-    new Date().toISOString().slice(0, 7);
+    state.params.att_month != null
+      ? state.params.att_month
+      : "";
 
   const filterLeader = state.params.att_leader || "";
   const filterStatus = state.params.att_status || "";
@@ -748,14 +750,15 @@ async function bizAttendance() {
     <div class="pill-row"
          style="align-items:center;gap:6px;flex-wrap:wrap">
 
-      <select id="att-month" style="max-width:140px">
+      <select id="att-month" style="max-width:160px">
+        <option value="" ${currentMonth === "" ? "selected" : ""}>Tất cả các tháng</option>
         ${
           monthOpts.map((m) => `
             <option value="${m}"
               ${m === currentMonth ? "selected" : ""}>
               Tháng ${m.split("-").reverse().join("/")}
             </option>
-          `).join("") || `<option>—</option>`
+          `).join("")
         }
       </select>
 
@@ -1230,7 +1233,7 @@ async function showAttPayQR(leader, month, rates) {
   const { data: rowsUnpaid } = await sb.from("biz_attendance").select("*").eq("leader_id", leader.id).eq("status", "approved").eq("paid", false).order("work_date", { ascending: true });
   let unpaid = rowsUnpaid || [];
   if (month) unpaid = unpaid.filter((x) => (x.work_date || "").slice(0, 7) === month);
-  if (!unpaid.length) { body.innerHTML = `<div class="empty">Không còn ngày công nào chưa CK cho tháng này.</div>`; return; }
+  if (!unpaid.length) { body.innerHTML = `<div class="empty">${month ? "Không còn ngày công nào chưa CK cho tháng này." : "Không còn ngày công nào chưa CK cho leader này."}</div>`; return; }
   const rows = unpaid.map((x) => `<tr>
     <td><input type="checkbox" class="attp-chk" data-id="${x.id}" data-amt="${x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om}" checked/></td>
     <td>${fmtDate(x.work_date)}</td>
@@ -1242,7 +1245,7 @@ async function showAttPayQR(leader, month, rates) {
       <div>
         <div class="pill-row"><button class="btn ghost sm" id="attp-all">Chọn tất cả</button><button class="btn ghost sm" id="attp-none">Bỏ chọn</button></div>
         <div class="table-wrap"><table><thead><tr><th></th><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th style="text-align:right">Số tiền</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <p class="meta" style="margin-top:6px">Nội dung CK: <code>Phu cap thang ${month} ${esc(removeVN(leader.full_name))}</code></p>
+        <p class="meta" style="margin-top:6px">Nội dung CK: <code>${month ? "Phu cap thang " + month + " " : "Phu cap "}${esc(removeVN(leader.full_name))}</code></p>
       </div>
       <div style="text-align:center">
         <div class="meta">Tổng thanh toán</div>
@@ -1261,7 +1264,7 @@ async function showAttPayQR(leader, month, rates) {
     const img = body.querySelector("#attp-qr"), btn = body.querySelector("#attp-done");
     if (amt <= 0) { img.style.display = "none"; btn.disabled = true; return; }
     img.style.display = "block"; btn.disabled = false;
-    const info = "Phu cap thang " + month + " " + removeVN(leader.full_name);
+    const info = (month ? "Phu cap thang " + month + " " : "Phu cap ") + removeVN(leader.full_name);
     img.src = `https://img.vietqr.io/image/${encodeURIComponent(leader.bank_code)}-${encodeURIComponent(leader.bank_account)}-compact2.png?amount=${amt}&addInfo=${encodeURIComponent(info)}&accountName=${encodeURIComponent(removeVN(leader.full_name))}`;
   };
   chks().forEach((c) => c.onchange = refreshQR);
