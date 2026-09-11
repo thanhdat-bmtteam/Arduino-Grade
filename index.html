@@ -2588,17 +2588,47 @@ async function guestProjects() {
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
 async function bizEmployees() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: emps, error }, { data: expensesRaw }, { data: projects }] = await Promise.all([
+  const [{ data: emps, error }, { data: expensesRaw }, { data: projects }, { data: tasksRaw }, { data: leadersRaw }] = await Promise.all([
     sb.from("biz_employees").select("*").order("name"),
     sb.from("biz_expenses").select("*"),
     sb.from("biz_projects").select("id,name"),
+    sb.from("biz_tasks").select("id,project_id,title,status,assignee_id"),
+    sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải nhân viên: ${esc(error.message)}</div>`; return; }
   const projName = {}; (projects || []).forEach((p) => projName[p.id] = p.name);
   const empList = emps || [];
   const empById = {}; empList.forEach((e) => empById[e.id] = e);
   const empByName = {}; empList.forEach((e) => empByName[e.name] = e);
-  const items = (expensesRaw || []).filter((x) => (x.employee_name || "").trim());
+
+  // Map assignee_id (profile.id) → employee_name để khớp task với expense
+  const norm = (v) => (v || "").toString().trim().toLowerCase();
+  const empNameByProfileId = {};
+  (leadersRaw || []).forEach((l) => {
+    let emp = null;
+    if (l.biz_employee_id) emp = empList.find((e) => norm(e.id) === norm(l.biz_employee_id));
+    if (!emp) emp = empList.find((e) => norm(e.name) === norm(l.full_name));
+    empNameByProfileId[l.id] = emp ? emp.name : l.full_name;
+  });
+  // Lookup task theo (project_id, title, employee_name)
+  const tk = (pid, title, empName) => `${pid || ""}||${norm(title)}||${norm(empName)}`;
+  const taskLookup = {};
+  (tasksRaw || []).forEach((t) => {
+    const en = empNameByProfileId[t.assignee_id];
+    if (!en) return;
+    taskLookup[tk(t.project_id, t.title, en)] = t;
+  });
+
+  // Chỉ hiện khoản chi mà nhiệm vụ tương ứng đã DUYỆT (status=done).
+  // Ngoại lệ: khoản trong TASK_SKIP (không có task) hoặc không tìm được task → vẫn hiện.
+  const items = (expensesRaw || []).filter((x) => {
+    if (!(x.employee_name || "").trim()) return false;
+    if (TASK_SKIP.has(x.note)) return true;
+    const title = CHI2TASK[x.note] || x.note;
+    const t = taskLookup[tk(x.project_id, title, x.employee_name)];
+    if (!t) return true;
+    return t.status === "done";
+  });
   const expMap = {}; items.forEach((x) => expMap[x.id] = x);
   const byName = {}; items.forEach((x) => { const n = x.employee_name.trim(); (byName[n] = byName[n] || []).push(x); });
   const allNames = [...new Set([...empList.map((e) => e.name), ...Object.keys(byName)])].sort((a, b) => a.localeCompare(b, "vi"));
@@ -2609,7 +2639,7 @@ async function bizEmployees() {
       <button class="btn" id="emp-new">＋ Nhân viên</button></div>
     <div id="emp-summary"></div>
     <div id="emp-list"></div>
-    <p class="meta" style="margin-top:8px">Lương tổng hợp từ các <b>khoản chi nhân công</b> ghi ở thẻ Dự án (theo tên nhân viên).</p>`;
+    <p class="meta" style="margin-top:8px">Lương tổng hợp từ <b>khoản chi nhân công</b> ở thẻ Dự án. Chỉ hiển thị khoản có <b>nhiệm vụ đã duyệt</b> ("Đã duyệt" ở tab Dự án). Nhiệm vụ đang "Chờ làm" / "Chờ duyệt" sẽ tự ẩn đến khi được duyệt.</p>`;
   document.getElementById("emp-new").onclick = () => openEmployeeModal(bizEmployees);
   const renderList = () => {
     const ef = document.getElementById("emp-filter").value;
@@ -2694,13 +2724,39 @@ async function showEmployeeQR(e /*, amount */) {
   if (!e || !e.bank_account || !e.bank_code) { toast("Nhân viên chưa có STK/ngân hàng — bấm Sửa để thêm", "err"); return; }
   showModal("Trả lương — " + esc(e.name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const [{ data: unpaidRows }, { data: projects }] = await Promise.all([
+  const [{ data: unpaidRows }, { data: projects }, { data: tasksRaw }, { data: leadersRaw }, { data: empRow }] = await Promise.all([
     sb.from("biz_expenses").select("*").eq("employee_name", e.name).eq("paid", false).order("expense_date", { ascending: true }),
     sb.from("biz_projects").select("id,name"),
+    sb.from("biz_tasks").select("id,project_id,title,status,assignee_id"),
+    sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
+    sb.from("biz_employees").select("id,name"),
   ]);
-  const list = unpaidRows || [];
+  // Áp dụng đúng logic filter với tab Nhân viên: chỉ giữ khoản có task done (hoặc TASK_SKIP / không có task)
+  const norm = (v) => (v || "").toString().trim().toLowerCase();
+  const empListAll = empRow || [];
+  const empNameByProfileId = {};
+  (leadersRaw || []).forEach((l) => {
+    let em = null;
+    if (l.biz_employee_id) em = empListAll.find((x) => norm(x.id) === norm(l.biz_employee_id));
+    if (!em) em = empListAll.find((x) => norm(x.name) === norm(l.full_name));
+    empNameByProfileId[l.id] = em ? em.name : l.full_name;
+  });
+  const tk = (pid, title, empName) => `${pid || ""}||${norm(title)}||${norm(empName)}`;
+  const taskLookup = {};
+  (tasksRaw || []).forEach((t) => {
+    const en = empNameByProfileId[t.assignee_id];
+    if (!en) return;
+    taskLookup[tk(t.project_id, t.title, en)] = t;
+  });
+  const list = (unpaidRows || []).filter((x) => {
+    if (TASK_SKIP.has(x.note)) return true;
+    const title = CHI2TASK[x.note] || x.note;
+    const t = taskLookup[tk(x.project_id, title, x.employee_name)];
+    if (!t) return true;
+    return t.status === "done";
+  });
   const projName = {}; (projects || []).forEach((p) => projName[p.id] = p.name);
-  if (!list.length) { body.innerHTML = `<div class="empty">Không còn khoản nào chưa CK cho <b>${esc(e.name)}</b>.</div>`; return; }
+  if (!list.length) { body.innerHTML = `<div class="empty">Không còn khoản nào chưa CK cho <b>${esc(e.name)}</b> (chỉ tính nhiệm vụ đã duyệt).</div>`; return; }
   const rows = list.map((x) => `<tr>
     <td><input type="checkbox" class="pay-chk" data-id="${x.id}" data-amt="${Number(x.amount) || 0}" checked/></td>
     <td>${esc(x.note || "(không tên)")}${projName[x.project_id] ? `<div class="meta">${esc(projName[x.project_id])}</div>` : ""}</td>
