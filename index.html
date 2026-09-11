@@ -2605,7 +2605,7 @@ async function bizEmployees() {
   bcontent().innerHTML = `
     <div class="pill-row">
       <select id="emp-filter" style="max-width:220px"><option value="">Tất cả nhân viên</option>${allNames.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select>
-      <select id="emp-status" style="max-width:170px"><option value="">Tất cả</option><option value="unpaid">Chưa CK</option><option value="paid">Đã CK</option></select>
+      <select id="emp-status" style="max-width:170px"><option value="unpaid" selected>Chưa CK</option><option value="paid">Đã CK</option><option value="">Tất cả</option></select>
       <button class="btn" id="emp-new">＋ Nhân viên</button></div>
     <div id="emp-summary"></div>
     <div id="emp-list"></div>
@@ -2621,6 +2621,8 @@ async function bizEmployees() {
       list.forEach((x) => { if (x.paid) totalPaid += Number(x.amount || 0); else totalUnpaid += Number(x.amount || 0); });
       const unpaid = list.filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
       const items2 = sf ? list.filter((x) => (sf === "paid" ? x.paid : !x.paid)) : list;
+      // Ẩn card của NV không có khoản nào match filter (VD lọc "Chưa CK" mà NV đã CK hết)
+      if (sf && items2.length === 0) return "";
       const rows = items2.map((x) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)">
         <div style="min-width:0"><div>${esc(x.note || "(không tên)")} ${x.project_id && projName[x.project_id] ? `<span class="badge gray">${esc(projName[x.project_id])}</span>` : ""}</div>
           <div class="meta">${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'} · ${fmtDate(x.expense_date)}</div></div>
@@ -2632,12 +2634,17 @@ async function bizEmployees() {
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="meta" style="margin-right:8px">Chưa CK: <b style="color:var(--red)">${fmtVND(unpaid)}</b></span>
             ${e ? `${e.bank_account ? `<button class="btn sm" data-empqr="${e.id}" data-amt="${unpaid}">QR trả lương</button>` : ""}<button class="btn ghost sm" data-emped="${e.id}">Sửa</button><button class="btn danger sm" data-empdel="${e.id}" data-name="${esc(name)}">Xoá</button>` : ""}</div></div>
         ${rows || `<p class="muted" style="margin:8px 0 0">Chưa có khoản lương nào.</p>`}</div>`;
-    }).join("");
+    }).filter(Boolean).join("");
     document.getElementById("emp-summary").innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Tổng chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(totalUnpaid)}</div></div>
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Tổng đã chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--green)">${fmtVND(totalPaid)}</div></div></div>`;
     const listEl = document.getElementById("emp-list");
-    listEl.innerHTML = cards || `<div class="empty"><div class="em">👥</div><p>Chưa có dữ liệu lương. Ghi khoản chi nhân công ở thẻ Dự án (có tên nhân viên).</p></div>`;
+    const emptyMsg = sf === "unpaid"
+      ? `<div class="empty"><div class="em">✅</div><p>Không còn khoản nào chưa CK. Đổi bộ lọc sang <b>Đã CK</b> hoặc <b>Tất cả</b> để xem lịch sử.</p></div>`
+      : sf === "paid"
+        ? `<div class="empty"><div class="em">💸</div><p>Chưa có khoản nào đã CK.</p></div>`
+        : `<div class="empty"><div class="em">👥</div><p>Chưa có dữ liệu lương. Ghi khoản chi nhân công ở thẻ Dự án (có tên nhân viên).</p></div>`;
+    listEl.innerHTML = cards || emptyMsg;
     on("[data-emped]", "click", (e) => openEmployeeModal(bizEmployees, empById[e.currentTarget.dataset.emped]), listEl);
     on("[data-empqr]", "click", (e) => showEmployeeQR(empById[e.currentTarget.dataset.empqr], Number(e.currentTarget.dataset.amt) || 0), listEl);
     on("[data-empdel]", "click", async (e) => {
