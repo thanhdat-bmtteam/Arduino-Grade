@@ -3682,11 +3682,46 @@ async function adminRegs() {
       </td>
     </tr>`).join("");
   setContent(`
-    <div class="section-title"><h2>Đăng ký</h2></div>
+    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <h2>Đăng ký</h2>
+      <button class="btn secondary" id="regs-csv" ${(data || []).length ? "" : "disabled"}>⬇ Xuất CSV (${(data || []).length})</button>
+    </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
     </table></div>`);
+  const csvBtn = document.getElementById("regs-csv");
+  if (csvBtn) csvBtn.onclick = () => {
+    // Prefix "\t" trước số điện thoại để Excel giữ leading zero (không cắt số 0 đầu)
+    const kp = (v) => (v ? "\t" + v : "");
+    const regType = (r) => r.reg_type === "project" ? "Nghiên cứu dự án" : "Lớp học";
+    const roleOrClass = (r) => r.reg_type === "project"
+      ? (r.desired_role === "gvhd" ? "GV hướng dẫn" : "Tác giả")
+      : (r.course_name || "");
+    const computer = (v) => v === true ? "Có" : v === false ? "Không" : "";
+    const stt = { new: "Mới", contacted: "Đã liên hệ", enrolled: "Đã duyệt", rejected: "Từ chối" };
+    const header = ["STT", "Họ và tên", "Ngày sinh", "Khối", "Trường", "Loại đăng ký", "Lớp / Vai trò", "SĐT học viên", "SĐT phụ huynh", "Email", "Phường/Xã", "Tỉnh/TP", "Máy tính", "Ghi chú", "Trạng thái", "Ngày đăng ký"];
+    const body = (data || []).map((r, i) => [
+      i + 1,
+      r.full_name || "",
+      r.birth_date ? fmtDate(r.birth_date) : "",
+      r.grade || "",
+      r.school || "",
+      regType(r),
+      roleOrClass(r),
+      kp(r.phone),
+      kp(r.parent_phone),
+      r.email || "",
+      r.ward || "",
+      r.province || "",
+      computer(r.has_computer),
+      r.note || "",
+      stt[r.status] || r.status || "",
+      r.created_at ? fmtDate(r.created_at) : "",
+    ]);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCSV(`dang-ky-${stamp}.csv`, [header, ...body]);
+  };
   const regMap = {}; (data || []).forEach((r) => { regMap[r.id] = r; });
   on("[data-approve]", "click", (e) => approveRegToAccount(regMap[e.currentTarget.dataset.approve]));
   on("[data-delreg]", "click", async (e) => {
