@@ -1875,17 +1875,39 @@ async function bizProjects() {
   });
   const thuBy = {};
   (incomes || []).forEach((x) => { thuBy[x.project_id] = (thuBy[x.project_id] || 0) + Number(x.amount || 0); });
+
+  // Filter theo trạng thái hoàn thành. Mặc định "active" (đang chạy) để tránh rối.
+  const pjFilter = state.params.pj_filter || "active";
+  const allProjects = projects || [];
+  const nActive = allProjects.filter((p) => !p.completed_at).length;
+  const nDone   = allProjects.filter((p) =>  p.completed_at).length;
+  const shown = allProjects.filter((p) =>
+    pjFilter === "done" ? !!p.completed_at
+    : pjFilter === "all"  ? true
+    : !p.completed_at
+  );
+
   let tQuote = 0, tThu = 0, tChi = 0;
   const pmap = {};
-  const cards = (projects || []).map((p) => {
+  const cards = shown.map((p) => {
     pmap[p.id] = p;
     const thu = thuBy[p.id] || 0;
     const chiDa = (invBy[(p.name || "").trim()] || 0) + (expPaidBy[p.id] || 0);
     const chiNo = expUnpaidBy[p.id] || 0;
     const ln = thu - chiDa;
     tQuote += Number(p.quote || 0); tThu += thu; tChi += chiDa;
-    return `<div class="card">
-        <div style="font-weight:700">${esc(p.name)}</div>
+    // Điều kiện hoàn thành: LN >= 0 (hoà vốn hoặc có lãi) VÀ đã CK hết cho NV (chiNo = 0)
+    const canComplete = ln >= 0 && chiNo === 0;
+    const blockReason = !canComplete
+      ? (ln < 0 ? `Đang lỗ ${fmtVND(-ln)} — cần thu thêm hoặc giảm chi.`
+                : `Còn ${fmtVND(chiNo)} chưa CK cho nhân viên.`)
+      : "";
+    const isDone = !!p.completed_at;
+    return `<div class="card" ${isDone ? 'style="opacity:.72"' : ""}>
+        <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
+          <div style="font-weight:700">${esc(p.name)}</div>
+          ${isDone ? `<span class="badge green">✅ Đã hoàn thành · ${fmtDate(p.completed_at)}</span>` : ""}
+        </div>
         <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b>${chiNo > 0 ? ` · Còn nợ NV: <b style="color:var(--amber)">${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
         <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-top:10px">
@@ -1894,23 +1916,63 @@ async function bizProjects() {
           <button class="btn ghost sm" data-pjqr="${p.id}">💰 QR thu</button>
           <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
+          ${isDone
+            ? `<button class="btn ghost sm" data-pjreopen="${p.id}" data-name="${esc(p.name)}">↺ Tiếp tục</button>`
+            : `<button class="btn success sm" data-pjdone="${p.id}" data-name="${esc(p.name)}" data-ln="${ln}" data-chino="${chiNo}"${canComplete ? "" : ` disabled title="${esc(blockReason)}"`}>✅ Hoàn thành</button>`}
           <button class="btn ghost sm" data-pjed="${p.id}">Sửa</button>
           <button class="btn danger sm" data-pjdel="${p.id}" data-name="${esc(p.name)}">Xoá</button>
           </div>
         </div></div>`;
   }).join("");
   const stat = (label, val, color) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
+  const filterLabel = pjFilter === "done" ? "đã hoàn thành" : pjFilter === "all" ? "tất cả" : "đang chạy";
+  const emptyMsg = pjFilter === "active"
+    ? (nDone > 0 ? `<div class="empty"><div class="em">🎉</div><p>Không có dự án đang chạy. ${nDone} dự án đã hoàn thành — chọn "Đã hoàn thành" hoặc "Tất cả" ở bộ lọc để xem.</p></div>`
+                 : `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`)
+    : pjFilter === "done"
+      ? `<div class="empty"><div class="em">📭</div><p>Chưa có dự án nào được đánh dấu hoàn thành.</p></div>`
+      : `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`;
   bcontent().innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
       ${stat("Tổng báo giá", tQuote)}${stat("Tổng thu", tThu, "var(--green)")}${stat("Tổng chi", tChi, "var(--red)")}${stat("Tổng lợi nhuận", tThu - tChi, (tThu - tChi) < 0 ? "var(--red)" : "var(--green)")}
     </div>
-    <div class="pill-row"><button class="btn" id="pj-new">＋ Tạo dự án</button></div>
-    ${cards || `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`}`;
+    <p class="meta" style="margin:0 0 6px">Đang xem <b>${filterLabel}</b> · Số liệu tổng chỉ tính các dự án đang hiển thị.</p>
+    <div class="pill-row">
+      <button class="btn" id="pj-new">＋ Tạo dự án</button>
+      <select id="pj-filter" style="max-width:180px">
+        <option value="active" ${pjFilter === "active" ? "selected" : ""}>Đang chạy (${nActive})</option>
+        <option value="done" ${pjFilter === "done" ? "selected" : ""}>Đã hoàn thành (${nDone})</option>
+        <option value="all" ${pjFilter === "all" ? "selected" : ""}>Tất cả (${allProjects.length})</option>
+      </select>
+    </div>
+    ${cards || emptyMsg}`;
   document.getElementById("pj-new").onclick = () => openProjectModal();
+  document.getElementById("pj-filter").onchange = (e) => { state.params.pj_filter = e.target.value; bizProjects(); };
   on("[data-pjed]", "click", (e) => openProjectModal(pmap[e.currentTarget.dataset.pjed]), bcontent());
   on("[data-pjexp]", "click", (e) => exportProjectInvoicesModal(pmap[e.currentTarget.dataset.pjexp]), bcontent());
   on("[data-pjqr]", "click", (e) => showProjectQR(pmap[e.currentTarget.dataset.pjqr]), bcontent());
   on("[data-pjdet]", "click", (e) => projectDetail(pmap[e.currentTarget.dataset.pjdet]), bcontent());
+  on("[data-pjdone]", "click", async (e) => {
+    const t = e.currentTarget;
+    const name = t.dataset.name;
+    const ln = Number(t.dataset.ln) || 0;
+    const chiNo = Number(t.dataset.chino) || 0;
+    // Re-check điều kiện phòng trường hợp DB đổi giữa render và click
+    if (ln < 0 || chiNo > 0) {
+      return toast(ln < 0 ? `Đang lỗ ${fmtVND(-ln)} — không thể hoàn thành.` : `Còn ${fmtVND(chiNo)} chưa CK cho NV.`, "err");
+    }
+    if (!confirm(`Đánh dấu dự án "${name}" là ĐÃ HOÀN THÀNH?\nDự án sẽ ẩn khỏi danh sách "Đang chạy". Bạn có thể mở lại bất cứ lúc nào.`)) return;
+    const { error: e2 } = await sb.from("biz_projects").update({ completed_at: new Date().toISOString() }).eq("id", t.dataset.pjdone);
+    if (e2) return toast("Lỗi: " + e2.message, "err");
+    toast(`Đã hoàn thành "${name}"`, "ok"); bizProjects();
+  }, bcontent());
+  on("[data-pjreopen]", "click", async (e) => {
+    const t = e.currentTarget;
+    if (!confirm(`Mở lại dự án "${t.dataset.name}"?\nDự án sẽ quay về danh sách "Đang chạy".`)) return;
+    const { error: e2 } = await sb.from("biz_projects").update({ completed_at: null }).eq("id", t.dataset.pjreopen);
+    if (e2) return toast("Lỗi: " + e2.message, "err");
+    toast("Đã mở lại dự án", "ok"); bizProjects();
+  }, bcontent());
   on("[data-pjdel]", "click", async (e) => {
     const name = e.currentTarget.dataset.name;
     if (!confirm(`Xoá dự án "${name}"?\nSẽ xoá luôn: khoản Thu, khoản Chi, và các HOÁ ĐƠN thuộc dự án này.`)) return;
