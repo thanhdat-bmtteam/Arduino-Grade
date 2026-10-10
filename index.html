@@ -553,6 +553,10 @@ async function leaderAttendance() {
   const months = Object.keys(byMonth).sort().reverse();
   const currentMonth = new Date().toISOString().slice(0, 7);
   const today = new Date().toISOString().slice(0, 10);
+  // Giới hạn chấm trễ: tối đa 3 ngày trước
+  const minDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  // Đếm ngày đã CK để hiển thị trên nút toggle
+  const nPaid = list.filter((x) => x.status === "approved" && x.paid).length;
   const monthCards = months.map((m) => {
     const items = byMonth[m];
     const approved = items.filter((x) => x.status === "approved");
@@ -561,35 +565,81 @@ async function leaderAttendance() {
     const totalMoney = nCaNhan * rates.ca_nhan + nXeOm * rates.xe_om;
     const paidMoney = approved.filter((x) => x.paid).reduce((s, x) => s + (x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om), 0);
     const unpaidMoney = totalMoney - paidMoney;
-    const trows = items.map((x) => `<tr>
+    const trows = items.map((x) => {
+      const isPaidRow = x.status === "approved" && x.paid;
+      const gpsCell = (x.lat != null && x.lng != null)
+        ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Xem</a>`
+        : '<span class="meta">—</span>';
+      return `<tr${isPaidRow ? ' class="att-paid-row"' : ""}>
       <td>${fmtDate(x.work_date)}</td>
       <td>${x.start_time.slice(0, 5)} – ${x.end_time.slice(0, 5)}</td>
       <td>${transportLabel(x.transport)}</td>
-      <td>${attStatusBadge(x.status)}${x.status === "approved" && x.paid ? ' <span class="badge green">Đã CK</span>' : ""}</td>
+      <td>${attStatusBadge(x.status)}${isPaidRow ? ' <span class="badge green">Đã CK</span>' : ""}</td>
+      <td>${gpsCell}</td>
       <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td>
-      <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`).join("");
+      <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`;
+    }).join("");
     return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>Tháng ${m.split("-").reverse().join("/")}</b>
         <span class="meta">Ngày công đã duyệt: <b>${approved.length}</b> (${nCaNhan} xe cá nhân + ${nXeOm} xe ôm) · Phụ cấp: <b>${fmtVND(totalMoney)}</b> (đã CK: ${fmtVND(paidMoney)}${unpaidMoney > 0 ? ", chưa CK: " + fmtVND(unpaidMoney) : ""})</span></div>
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:14%"><col style="width:18%"><col style="width:20%"><col style="width:16%"><col style="width:24%"><col style="width:8%"></colgroup>
-        <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Ghi chú Admin</th><th></th></tr></thead>
+        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:16%"><col style="width:16%"><col style="width:10%"><col style="width:22%"><col style="width:8%"></colgroup>
+        <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Vị trí</th><th>Ghi chú Admin</th><th></th></tr></thead>
         <tbody>${trows}</tbody></table></div></div>`;
   }).join("");
   document.getElementById("att-body").innerHTML = `
+    <style>.att-paid-row.hidden{display:none}</style>
     <div class="card">
       <b>Khai báo ngày công</b>
-      <p class="meta" style="margin:4px 0 8px">Thời gian làm phải <b>≥ 2 giờ</b> mới được tính 1 ngày công. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>.</p>
+      <p class="meta" style="margin:4px 0 8px">Thời gian làm phải <b>≥ 2 giờ</b> mới được tính 1 ngày công. Chỉ cho khai báo trong vòng <b>3 ngày</b> gần nhất. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>.</p>
       <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
-        <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="att-date" type="date" max="${today}" value="${today}"/></div>
+        <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="att-date" type="date" min="${minDate}" max="${today}" value="${today}"/></div>
         <div class="field" style="max-width:110px;margin:0"><label>Giờ bắt đầu</label><input id="att-start" type="time" value="08:00"/></div>
         <div class="field" style="max-width:110px;margin:0"><label>Giờ kết thúc</label><input id="att-end" type="time" value="11:00"/></div>
         <div class="field" style="max-width:180px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
         <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm đó"/></div>
-        <button class="btn" id="att-submit" type="button">Gửi</button></div>
+      </div>
+      <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+        <button class="btn ghost sm" id="att-gps" type="button">📍 Lấy định vị GPS</button>
+        <span id="att-gps-status" class="meta">Chưa có GPS — bắt buộc trước khi gửi</span>
+        <button class="btn" id="att-submit" type="button" style="margin-left:auto">Gửi</button>
+      </div>
       <p id="att-hint" class="meta" style="margin:6px 0 0"></p>
     </div>
+    ${nPaid > 0 ? `<div style="margin:10px 0"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nPaid} ngày đã CK</button></div>` : ""}
     ${monthCards || `<div class="empty"><div class="em">🕒</div><p>Chưa có ngày công nào.</p></div>`}`;
+  // Mặc định ẩn ngày đã CK
+  document.querySelectorAll(".att-paid-row").forEach((r) => r.classList.add("hidden"));
+  const togBtn = document.getElementById("att-toggle-paid");
+  if (togBtn) {
+    let shown = false;
+    togBtn.onclick = () => {
+      shown = !shown;
+      document.querySelectorAll(".att-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
+      togBtn.textContent = shown ? `🙈 Ẩn ${nPaid} ngày đã CK` : `👁 Hiện ${nPaid} ngày đã CK`;
+    };
+  }
+  // GPS
+  let gpsLoc = null;
+  const gpsStatus = document.getElementById("att-gps-status");
+  document.getElementById("att-gps").onclick = (e) => {
+    if (!navigator.geolocation) { gpsStatus.innerHTML = '<span style="color:var(--red)">Trình duyệt không hỗ trợ GPS</span>'; return; }
+    e.target.disabled = true;
+    gpsStatus.textContent = "⏳ Đang lấy GPS...";
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        gpsLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        gpsStatus.innerHTML = `<span style="color:var(--green)">✓ ${gpsLoc.lat.toFixed(5)}, ${gpsLoc.lng.toFixed(5)}</span> · độ chính xác ~${Math.round(pos.coords.accuracy)}m`;
+        e.target.disabled = false;
+        e.target.textContent = "📍 Lấy lại GPS";
+      },
+      (err) => {
+        gpsStatus.innerHTML = `<span style="color:var(--red)">❌ ${err.message} — cần bật quyền định vị</span>`;
+        e.target.disabled = false;
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
   const startEl = document.getElementById("att-start"), endEl = document.getElementById("att-end"), hint = document.getElementById("att-hint");
   const updHint = () => {
     const h = attDuration(startEl.value, endEl.value);
@@ -604,8 +654,18 @@ async function leaderAttendance() {
     const h = attDuration(start, end);
     if (!date || Number.isNaN(h)) return toast("Kiểm tra lại ngày/giờ", "err");
     if (h < 2) return toast("Thời gian làm phải ≥ 2 giờ mới tính công", "err");
+    // Check 3 ngày
+    const diffDays = Math.floor((new Date(today) - new Date(date)) / 86400000);
+    if (diffDays > 3) return toast("Chỉ cho khai báo trong vòng 3 ngày gần nhất", "err");
+    if (diffDays < 0) return toast("Không được khai báo cho ngày tương lai", "err");
+    if (!gpsLoc) return toast("Phải bấm \"Lấy định vị GPS\" trước khi gửi", "err");
     e.target.disabled = true;
-    const { error } = await sb.from("biz_attendance").insert({ leader_id: me, work_date: date, start_time: start, end_time: end, transport: document.getElementById("att-transport").value, note: document.getElementById("att-note").value.trim() });
+    const { error } = await sb.from("biz_attendance").insert({
+      leader_id: me, work_date: date, start_time: start, end_time: end,
+      transport: document.getElementById("att-transport").value,
+      note: document.getElementById("att-note").value.trim(),
+      lat: gpsLoc.lat, lng: gpsLoc.lng, loc_at: new Date().toISOString()
+    });
     if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
     toast("Đã gửi. Chờ Admin duyệt.", "ok"); leaderAttendance();
   };
@@ -899,6 +959,14 @@ async function bizAttendance() {
               </td>
 
               <td style="white-space:nowrap">
+                ${
+                  x.lat != null && x.lng != null
+                    ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Xem</a>`
+                    : '<span class="meta" style="color:var(--amber)">⚠ Không có</span>'
+                }
+              </td>
+
+              <td style="white-space:nowrap">
 
                 ${
                   x.status === "pending"
@@ -1013,11 +1081,12 @@ async function bizAttendance() {
                   ">
 
                   <colgroup>
-                    <col style="width:12%">
-                    <col style="width:18%">
+                    <col style="width:10%">
                     <col style="width:16%">
-                    <col style="width:16%">
-                    <col style="width:22%">
+                    <col style="width:14%">
+                    <col style="width:14%">
+                    <col style="width:20%">
+                    <col style="width:10%">
                     <col style="width:16%">
                   </colgroup>
 
@@ -1028,6 +1097,7 @@ async function bizAttendance() {
                       <th>Phương tiện</th>
                       <th>Trạng thái</th>
                       <th>Ghi chú</th>
+                      <th>Vị trí</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -1857,12 +1927,17 @@ async function showProjectQR(p) {
 
 async function bizProjects() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }] = await Promise.all([
+  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates] = await Promise.all([
     sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
     sb.from("biz_invoices").select("project_name,total"),
     sb.from("biz_expenses").select("project_id,amount,paid"),
     sb.from("biz_incomes").select("project_id,amount"),
+    sb.from("biz_attendance").select("transport,paid,status").eq("status", "approved").eq("paid", true),
+    getAttRates(),
   ]);
+  // Tổng phụ cấp đã CK cho toàn bộ leader (không gắn với dự án nào)
+  const allowancePaid = (attRows || []).reduce((s, x) =>
+    s + (x.transport === "ca_nhan" ? (rates.ca_nhan || 0) : (rates.xe_om || 0)), 0);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải dự án: ${esc(error.message)}</div>`; return; }
   const invBy = {}, invCnt = {};
   (invoices || []).forEach((iv) => { const k = (iv.project_name || "").trim(); if (k) { invBy[k] = (invBy[k] || 0) + Number(iv.total || 0); invCnt[k] = (invCnt[k] || 0) + 1; } });
@@ -1924,7 +1999,8 @@ async function bizProjects() {
           </div>
         </div></div>`;
   }).join("");
-  const stat = (label, val, color) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
+  const stat = (label, val, color, hint) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}${hint ? ` <span class="meta" title="${esc(hint)}" style="cursor:help">ⓘ</span>` : ""}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
+  const tLN = tThu - tChi - allowancePaid;
   const filterLabel = pjFilter === "done" ? "đã hoàn thành" : pjFilter === "all" ? "tất cả" : "đang chạy";
   const emptyMsg = pjFilter === "active"
     ? (nDone > 0 ? `<div class="empty"><div class="em">🎉</div><p>Không có dự án đang chạy. ${nDone} dự án đã hoàn thành — chọn "Đã hoàn thành" hoặc "Tất cả" ở bộ lọc để xem.</p></div>`
@@ -1934,9 +2010,9 @@ async function bizProjects() {
       : `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`;
   bcontent().innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      ${stat("Tổng báo giá", tQuote)}${stat("Tổng thu", tThu, "var(--green)")}${stat("Tổng chi", tChi, "var(--red)")}${stat("Tổng lợi nhuận", tThu - tChi, (tThu - tChi) < 0 ? "var(--red)" : "var(--green)")}
+      ${stat("Tổng báo giá", tQuote)}${stat("Tổng thu", tThu, "var(--green)")}${stat("Tổng chi", tChi, "var(--red)")}${stat("Phụ cấp đã CK", allowancePaid, "var(--red)", "Tổng phụ cấp đã chuyển khoản cho leader (từ Chấm công). Không gắn với dự án cụ thể nên chỉ trừ vào Tổng lợi nhuận.")}${stat("Tổng lợi nhuận", tLN, tLN < 0 ? "var(--red)" : "var(--green)", "= Tổng thu − Tổng chi − Phụ cấp đã CK")}
     </div>
-    <p class="meta" style="margin:0 0 6px">Đang xem <b>${filterLabel}</b> · Số liệu tổng chỉ tính các dự án đang hiển thị.</p>
+    <p class="meta" style="margin:0 0 6px">Đang xem <b>${filterLabel}</b> · Số liệu tổng chỉ tính các dự án đang hiển thị (riêng Phụ cấp đã CK là tổng toàn hệ thống).</p>
     <div class="pill-row">
       <button class="btn" id="pj-new">＋ Tạo dự án</button>
       <select id="pj-filter" style="max-width:180px">
@@ -2504,7 +2580,8 @@ async function leaderTasks() {
       } else if (mine && t.status === "review") {
         actionHTML = `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>`;
       }
-      return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
+      const rowClass = [mine ? "" : "", t.status === "done" ? "mt-done-row" : ""].filter(Boolean).join(" ");
+      return `<tr class="${rowClass}"${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
         <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${noteHTML}</td>
         <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
         <td>${stx(t.status)}</td>
@@ -2531,16 +2608,43 @@ async function leaderTasks() {
 https://…"></textarea></div>
         <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div></div>`;
   };
-  const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
+  const payRows = (pays || []).map((x) => `<tr class="${x.paid ? "mt-paid-row" : ""}"><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
+  // Đếm số lượng để hiển thị trên nút toggle
+  const nDoneTasks = (tasks || []).filter((t) => isMine(t) && t.status === "done").length;
+  const nPaidPays  = (pays || []).filter((x) => x.paid).length;
   document.getElementById("mt-body").innerHTML = `
+    <style>.mt-done-row.hidden,.mt-paid-row.hidden{display:none}</style>
+    ${nDoneTasks > 0 ? `<div style="margin:0 0 10px"><button class="btn ghost sm" id="mt-toggle-done">👁 Hiện ${nDoneTasks} phần việc đã duyệt</button></div>` : ""}
     ${groups.length ? groups.map(projBlock).join("") : `<div class="empty"><div class="em">📋</div><p>Bạn chưa được giao phần việc nào.</p><p class="meta">ID của bạn: <code>${esc(me)}</code>${(tasks || []).length ? ` · đọc được ${(tasks || []).length} task nhưng không có task nào gắn ID này.` : " · không đọc được task nào (RLS?)."}</p></div>`}
     <h3 style="font-size:14px;margin:18px 0 6px">Lương của tôi</h3>
     <p class="meta">Tính theo tên: <b>${esc(empName || "")}</b>${state.profile.biz_employee_id ? "" : " <span class=\"badge amber\">chưa liên kết Nhân viên</span>"}</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px">
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Đã chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--green)">${fmtVND(paid)}</div></div>
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(unpaid)}</div></div></div>
+    ${nPaidPays > 0 ? `<div style="margin:0 0 8px"><button class="btn ghost sm" id="mt-toggle-paid">👁 Hiện ${nPaidPays} khoản đã CK</button></div>` : ""}
     <div class="table-wrap"><table><thead><tr><th>Nội dung / Dự án</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th></tr></thead>
     <tbody>${payRows || `<tr><td colspan="4" class="empty">Chưa có khoản lương.</td></tr>`}</tbody></table></div>`;
+  // Mặc định ẩn các row đã xong / đã CK
+  document.querySelectorAll(".mt-done-row").forEach((r) => r.classList.add("hidden"));
+  document.querySelectorAll(".mt-paid-row").forEach((r) => r.classList.add("hidden"));
+  const btnDone = document.getElementById("mt-toggle-done");
+  if (btnDone) {
+    let shown = false;
+    btnDone.onclick = () => {
+      shown = !shown;
+      document.querySelectorAll(".mt-done-row").forEach((r) => r.classList.toggle("hidden", !shown));
+      btnDone.textContent = shown ? `🙈 Ẩn ${nDoneTasks} phần việc đã duyệt` : `👁 Hiện ${nDoneTasks} phần việc đã duyệt`;
+    };
+  }
+  const btnPaid = document.getElementById("mt-toggle-paid");
+  if (btnPaid) {
+    let shown = false;
+    btnPaid.onclick = () => {
+      shown = !shown;
+      document.querySelectorAll(".mt-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
+      btnPaid.textContent = shown ? `🙈 Ẩn ${nPaidPays} khoản đã CK` : `👁 Hiện ${nPaidPays} khoản đã CK`;
+    };
+  }
   // Chèn khối file dưới mỗi thẻ dự án (chỉ áp cho các dự án mình có tham gia)
   for (const g of groups) {
     const card = document.querySelector(`[data-mtcard="${g.p.id}"]`);
