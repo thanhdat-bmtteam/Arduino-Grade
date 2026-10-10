@@ -854,6 +854,33 @@ async function bizAttendance() {
       byLeader[x.leader_id] || []).push(x);
   });
 
+  // Sort rows trong mỗi leader: pending → approved chưa CK → rejected → approved + đã CK (ẩn mặc định)
+  const rowPriority = (x) =>
+    x.status === "pending" ? 0
+    : x.status === "approved" && !x.paid ? 1
+    : x.status === "rejected" ? 2
+    : 3; // approved + paid
+  Object.keys(byLeader).forEach((lid) => {
+    byLeader[lid].sort((a, b) => rowPriority(a) - rowPriority(b));
+  });
+
+  // Sort leader: ưu tiên có pending hoặc chưa CK → đầu; cuối cùng là leader chỉ còn ngày đã CK
+  const activeCount = (lid) =>
+    byLeader[lid].filter((x) => x.status === "pending" || (x.status === "approved" && !x.paid) || x.status === "rejected").length;
+  const leaderOrder = Object.keys(byLeader).sort((a, b) => {
+    const aa = activeCount(a), ab = activeCount(b);
+    if (aa !== ab) return ab - aa; // nhiều mục cần chú ý hơn → đầu
+    const pa = byLeader[a].filter((x) => x.status === "pending").length;
+    const pb = byLeader[b].filter((x) => x.status === "pending").length;
+    if (pa !== pb) return pb - pa;
+    const na = (leaderById[a] && leaderById[a].full_name) || "";
+    const nb = (leaderById[b] && leaderById[b].full_name) || "";
+    return na.localeCompare(nb, "vi");
+  });
+  // Đếm tổng số row đã CK và thẻ leader "all paid" để hiển thị trên nút toggle
+  const nAllPaidRows = filtered.filter((x) => x.status === "approved" && x.paid).length;
+  const nAllPaidLeaders = leaderOrder.filter((lid) => activeCount(lid) === 0).length;
+
   // ===========================
   // Render
   // ===========================
@@ -916,11 +943,13 @@ async function bizAttendance() {
       Chỉ tính 1 ngày công khi thời gian làm ≥ 2h.
     </p>
 
+    <style>#att-list .att-paid-row.hidden,#att-list .att-card-all-paid.hidden{display:none}</style>
+    ${(nAllPaidRows > 0 || nAllPaidLeaders > 0) ? `<div style="margin:4px 0 10px"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}</button></div>` : ""}
     <div id="att-list">
       ${
-        Object.keys(byLeader).length
+        leaderOrder.length
 
-        ? Object.keys(byLeader).map((lid) => {
+        ? leaderOrder.map((lid) => {
 
           const l = leaderById[lid];
           const its = byLeader[lid];
@@ -955,7 +984,7 @@ async function bizAttendance() {
             );
 
           const trows = its.map((x) => `
-            <tr>
+            <tr${x.status === "approved" && x.paid ? ' class="att-paid-row"' : ""}>
 
               <td>
                 ${fmtDate(x.work_date)}
@@ -1050,8 +1079,10 @@ async function bizAttendance() {
             </tr>
           `).join("");
 
+          const nPending = its.filter((x) => x.status === "pending").length;
+          const isAllPaid = activeCount(lid) === 0;
           return `
-            <div class="card">
+            <div class="card${isAllPaid ? " att-card-all-paid" : ""}"${nPending > 0 ? ' style="border:2px solid var(--amber)"' : ""}>
 
               <div style="
                 display:flex;
@@ -1063,6 +1094,7 @@ async function bizAttendance() {
 
                 <b>
                   ${esc(l ? l.full_name : "(?)")}
+                  ${nPending > 0 ? `<span class="badge amber">⏳ ${nPending} chờ duyệt</span>` : ""}
                 </b>
 
                 <span class="meta">
@@ -1221,6 +1253,24 @@ async function bizAttendance() {
 
   document.getElementById("att-rates").onclick =
     () => openAttRatesModal(rates);
+
+  // ===========================
+  // TOGGLE ẨN/HIỆN ĐÃ CK
+  // ===========================
+  document.querySelectorAll("#att-list .att-paid-row").forEach((r) => r.classList.add("hidden"));
+  document.querySelectorAll("#att-list .att-card-all-paid").forEach((c) => c.classList.add("hidden"));
+  const attTogBtn = document.getElementById("att-toggle-paid");
+  if (attTogBtn) {
+    let shown = false;
+    attTogBtn.onclick = () => {
+      shown = !shown;
+      document.querySelectorAll("#att-list .att-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
+      document.querySelectorAll("#att-list .att-card-all-paid").forEach((c) => c.classList.toggle("hidden", !shown));
+      attTogBtn.textContent = shown
+        ? `🙈 Ẩn ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}`
+        : `👁 Hiện ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}`;
+    };
+  }
 
   // ===========================
   // DUYỆT
