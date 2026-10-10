@@ -2641,6 +2641,7 @@ async function leaderTasks() {
         <colgroup><col style="width:30%"><col style="width:24%"><col style="width:16%"><col style="width:30%"></colgroup>
         <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
+      ${r === "admin" ? `
       <h3 style="font-size:13px;margin:12px 0 2px">Thông báo tiến độ</h3>
       ${(progressAll || []).filter((x) => x.project_id === g.p.id).map((x) => `<div style="padding:8px 0;border-top:1px solid var(--line)">
           <div style="display:flex;justify-content:space-between;gap:8px"><span class="meta"><b>${fmtDate(x.report_date)}</b></span>
@@ -2653,7 +2654,7 @@ async function leaderTasks() {
         <div class="field" style="flex:2;min-width:160px;margin:0"><label>Nội dung</label><input class="lpg-content" data-pid="${g.p.id}" placeholder="Hôm nay đã làm gì…"/></div>
         <div class="field" style="flex:2;min-width:220px;margin:0"><label>Link đính kèm (mỗi dòng 1 link)</label><textarea class="lpg-url" data-pid="${g.p.id}" rows="2" placeholder="https://…
 https://…"></textarea></div>
-        <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div></div>`;
+        <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div>` : ""}</div>`;
   };
   const payRows = (pays || []).map((x) => `<tr class="${x.paid ? "mt-paid-row" : ""}"><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   // Đếm số lượng để hiển thị trên nút toggle
