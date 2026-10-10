@@ -547,16 +547,16 @@ async function leaderAttendance() {
   const rates = await getAttRates();
   const { data: rows } = await sb.from("biz_attendance").select("*").eq("leader_id", me).order("work_date", { ascending: false }).order("start_time", { ascending: false });
   const list = rows || [];
+  // Tìm ca đang mở (end_time null)
+  const openShift = list.find((x) => !x.end_time);
+  // Chỉ hiển thị ca đã đóng trong bảng history
+  const closedList = list.filter((x) => x.end_time);
   // Gom theo tháng
   const byMonth = {};
-  list.forEach((x) => { const k = (x.work_date || "").slice(0, 7); (byMonth[k] = byMonth[k] || []).push(x); });
+  closedList.forEach((x) => { const k = (x.work_date || "").slice(0, 7); (byMonth[k] = byMonth[k] || []).push(x); });
   const months = Object.keys(byMonth).sort().reverse();
-  const currentMonth = new Date().toISOString().slice(0, 7);
-  const today = new Date().toISOString().slice(0, 10);
-  // Giới hạn chấm trễ: tối đa 3 ngày trước
-  const minDate = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
   // Đếm ngày đã CK để hiển thị trên nút toggle
-  const nPaid = list.filter((x) => x.status === "approved" && x.paid).length;
+  const nPaid = closedList.filter((x) => x.status === "approved" && x.paid).length;
   const monthCards = months.map((m) => {
     const items = byMonth[m];
     const approved = items.filter((x) => x.status === "approved");
@@ -567,15 +567,18 @@ async function leaderAttendance() {
     const unpaidMoney = totalMoney - paidMoney;
     const trows = items.map((x) => {
       const isPaidRow = x.status === "approved" && x.paid;
-      const gpsCell = (x.lat != null && x.lng != null)
-        ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Xem</a>`
+      const gpsIn = (x.lat != null && x.lng != null)
+        ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="Vào ca: ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Vào</a>`
         : '<span class="meta">—</span>';
+      const gpsOut = (x.lat_out != null && x.lng_out != null)
+        ? ` · <a href="https://www.google.com/maps?q=${x.lat_out},${x.lng_out}" target="_blank" rel="noopener" title="Tan ca: ${x.lat_out.toFixed(5)}, ${x.lng_out.toFixed(5)}">📍 Tan</a>`
+        : '';
       return `<tr${isPaidRow ? ' class="att-paid-row"' : ""}>
       <td>${fmtDate(x.work_date)}</td>
       <td>${x.start_time.slice(0, 5)} – ${x.end_time.slice(0, 5)}</td>
       <td>${transportLabel(x.transport)}</td>
       <td>${attStatusBadge(x.status)}${isPaidRow ? ' <span class="badge green">Đã CK</span>' : ""}</td>
-      <td>${gpsCell}</td>
+      <td>${gpsIn}${gpsOut}</td>
       <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td>
       <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`;
     }).join("");
@@ -583,29 +586,49 @@ async function leaderAttendance() {
         <b>Tháng ${m.split("-").reverse().join("/")}</b>
         <span class="meta">Ngày công đã duyệt: <b>${approved.length}</b> (${nCaNhan} xe cá nhân + ${nXeOm} xe ôm) · Phụ cấp: <b>${fmtVND(totalMoney)}</b> (đã CK: ${fmtVND(paidMoney)}${unpaidMoney > 0 ? ", chưa CK: " + fmtVND(unpaidMoney) : ""})</span></div>
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:16%"><col style="width:16%"><col style="width:10%"><col style="width:22%"><col style="width:8%"></colgroup>
+        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:14%"><col style="width:14%"><col style="width:16%"><col style="width:20%"><col style="width:8%"></colgroup>
         <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Vị trí</th><th>Ghi chú Admin</th><th></th></tr></thead>
         <tbody>${trows}</tbody></table></div></div>`;
   }).join("");
+
+  // Panel vào ca / tan ca
+  let actionPanel;
+  if (openShift) {
+    const startMs = new Date(openShift.work_date + "T" + openShift.start_time).getTime();
+    const elapsed = (Date.now() - startMs) / 3600000;
+    actionPanel = `
+      <div class="card" style="border:2px solid var(--amber);background:#fef8ec">
+        <div style="font-weight:700;font-size:1.05rem">⏱ Đang trong ca</div>
+        <p class="meta" style="margin:6px 0">Vào ca lúc: <b>${fmtDate(openShift.work_date)} ${openShift.start_time.slice(0,5)}</b> · Phương tiện: <b>${transportLabel(openShift.transport)}</b>${openShift.note ? " · Ghi chú: " + esc(openShift.note) : ""}</p>
+        ${openShift.lat != null ? `<p class="meta" style="margin:4px 0">📍 Vị trí vào ca: <a href="https://www.google.com/maps?q=${openShift.lat},${openShift.lng}" target="_blank" rel="noopener">${openShift.lat.toFixed(5)}, ${openShift.lng.toFixed(5)}</a></p>` : ''}
+        <p class="meta" style="margin:4px 0">Đã làm: <b>${elapsed.toFixed(1)}h</b>${elapsed > 12 ? ' <span style="color:var(--red)">⚠ Ca kéo dài quá 12h — nếu bạn quên tan ca, hãy bấm "Huỷ ca" và vào ca lại.</span>' : ''}</p>
+        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn ghost sm" id="att-gps-out" type="button">📍 Lấy định vị GPS</button>
+          <span id="att-gps-status-out" class="meta">Chưa có GPS — bắt buộc trước khi tan ca</span>
+          <button class="btn danger" id="att-cancel-shift" type="button">Huỷ ca</button>
+          <button class="btn success" id="att-clock-out" type="button" style="margin-left:auto">🔴 Tan ca</button>
+        </div>
+      </div>`;
+  } else {
+    actionPanel = `
+      <div class="card">
+        <div style="font-weight:700;font-size:1.05rem">Vào ca</div>
+        <p class="meta" style="margin:4px 0 8px">Bấm nút khi bắt đầu làm việc — hệ thống sẽ ghi lại <b>thời gian hiện tại</b> và <b>vị trí GPS</b>. Khi về, bấm "Tan ca" để kết thúc. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>. Thời gian làm phải ≥ 2h mới được tính 1 ngày công.</p>
+        <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
+          <div class="field" style="max-width:220px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
+          <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm nay"/></div>
+        </div>
+        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
+          <button class="btn ghost sm" id="att-gps" type="button">📍 Lấy định vị GPS</button>
+          <span id="att-gps-status" class="meta">Chưa có GPS — bắt buộc trước khi vào ca</span>
+          <button class="btn success" id="att-clock-in" type="button" style="margin-left:auto">🔵 Vào ca</button>
+        </div>
+      </div>`;
+  }
+
   document.getElementById("att-body").innerHTML = `
     <style>.att-paid-row.hidden{display:none}</style>
-    <div class="card">
-      <b>Khai báo ngày công</b>
-      <p class="meta" style="margin:4px 0 8px">Thời gian làm phải <b>≥ 2 giờ</b> mới được tính 1 ngày công. Chỉ cho khai báo trong vòng <b>3 ngày</b> gần nhất. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>.</p>
-      <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
-        <div class="field" style="max-width:160px;margin:0"><label>Ngày</label><input id="att-date" type="date" min="${minDate}" max="${today}" value="${today}"/></div>
-        <div class="field" style="max-width:110px;margin:0"><label>Giờ bắt đầu</label><input id="att-start" type="time" value="08:00"/></div>
-        <div class="field" style="max-width:110px;margin:0"><label>Giờ kết thúc</label><input id="att-end" type="time" value="11:00"/></div>
-        <div class="field" style="max-width:180px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
-        <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm đó"/></div>
-      </div>
-      <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
-        <button class="btn ghost sm" id="att-gps" type="button">📍 Lấy định vị GPS</button>
-        <span id="att-gps-status" class="meta">Chưa có GPS — bắt buộc trước khi gửi</span>
-        <button class="btn" id="att-submit" type="button" style="margin-left:auto">Gửi</button>
-      </div>
-      <p id="att-hint" class="meta" style="margin:6px 0 0"></p>
-    </div>
+    ${actionPanel}
     ${nPaid > 0 ? `<div style="margin:10px 0"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nPaid} ngày đã CK</button></div>` : ""}
     ${monthCards || `<div class="empty"><div class="em">🕒</div><p>Chưa có ngày công nào.</p></div>`}`;
   // Mặc định ẩn ngày đã CK
@@ -619,56 +642,75 @@ async function leaderAttendance() {
       togBtn.textContent = shown ? `🙈 Ẩn ${nPaid} ngày đã CK` : `👁 Hiện ${nPaid} ngày đã CK`;
     };
   }
-  // GPS
-  let gpsLoc = null;
-  const gpsStatus = document.getElementById("att-gps-status");
-  document.getElementById("att-gps").onclick = (e) => {
-    if (!navigator.geolocation) { gpsStatus.innerHTML = '<span style="color:var(--red)">Trình duyệt không hỗ trợ GPS</span>'; return; }
-    e.target.disabled = true;
-    gpsStatus.textContent = "⏳ Đang lấy GPS...";
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        gpsLoc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        gpsStatus.innerHTML = `<span style="color:var(--green)">✓ ${gpsLoc.lat.toFixed(5)}, ${gpsLoc.lng.toFixed(5)}</span> · độ chính xác ~${Math.round(pos.coords.accuracy)}m`;
-        e.target.disabled = false;
-        e.target.textContent = "📍 Lấy lại GPS";
-      },
-      (err) => {
-        gpsStatus.innerHTML = `<span style="color:var(--red)">❌ ${err.message} — cần bật quyền định vị</span>`;
-        e.target.disabled = false;
-      },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-    );
+  // Helper GPS chung
+  const setupGPS = (btnId, statusId) => {
+    const state = { loc: null };
+    const btn = document.getElementById(btnId);
+    const statusEl = document.getElementById(statusId);
+    if (!btn) return state;
+    btn.onclick = (e) => {
+      if (!navigator.geolocation) { statusEl.innerHTML = '<span style="color:var(--red)">Trình duyệt không hỗ trợ GPS</span>'; return; }
+      e.target.disabled = true;
+      statusEl.textContent = "⏳ Đang lấy GPS...";
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          state.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          statusEl.innerHTML = `<span style="color:var(--green)">✓ ${state.loc.lat.toFixed(5)}, ${state.loc.lng.toFixed(5)}</span> · độ chính xác ~${Math.round(pos.coords.accuracy)}m`;
+          e.target.disabled = false;
+          e.target.textContent = "📍 Lấy lại GPS";
+        },
+        (err) => {
+          statusEl.innerHTML = `<span style="color:var(--red)">❌ ${err.message} — cần bật quyền định vị</span>`;
+          e.target.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    };
+    return state;
   };
-  const startEl = document.getElementById("att-start"), endEl = document.getElementById("att-end"), hint = document.getElementById("att-hint");
-  const updHint = () => {
-    const h = attDuration(startEl.value, endEl.value);
-    if (Number.isNaN(h)) hint.innerHTML = '<span style="color:var(--red)">Giờ kết thúc phải sau giờ bắt đầu.</span>';
-    else if (h < 2) hint.innerHTML = `<span style="color:var(--red)">Chỉ ${h.toFixed(1)}h — cần ≥ 2h mới được tính công.</span>`;
-    else hint.innerHTML = `<span class="meta">Thời gian làm: <b>${h.toFixed(1)}h</b> — hợp lệ.</span>`;
-  };
-  startEl.oninput = updHint; endEl.oninput = updHint; updHint();
-  document.getElementById("att-submit").onclick = async (e) => {
-    const date = document.getElementById("att-date").value;
-    const start = startEl.value, end = endEl.value;
-    const h = attDuration(start, end);
-    if (!date || Number.isNaN(h)) return toast("Kiểm tra lại ngày/giờ", "err");
-    if (h < 2) return toast("Thời gian làm phải ≥ 2 giờ mới tính công", "err");
-    // Check 3 ngày
-    const diffDays = Math.floor((new Date(today) - new Date(date)) / 86400000);
-    if (diffDays > 3) return toast("Chỉ cho khai báo trong vòng 3 ngày gần nhất", "err");
-    if (diffDays < 0) return toast("Không được khai báo cho ngày tương lai", "err");
-    if (!gpsLoc) return toast("Phải bấm \"Lấy định vị GPS\" trước khi gửi", "err");
-    e.target.disabled = true;
-    const { error } = await sb.from("biz_attendance").insert({
-      leader_id: me, work_date: date, start_time: start, end_time: end,
-      transport: document.getElementById("att-transport").value,
-      note: document.getElementById("att-note").value.trim(),
-      lat: gpsLoc.lat, lng: gpsLoc.lng, loc_at: new Date().toISOString()
-    });
-    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    toast("Đã gửi. Chờ Admin duyệt.", "ok"); leaderAttendance();
-  };
+
+  if (openShift) {
+    // === TAN CA ===
+    const gps = setupGPS("att-gps-out", "att-gps-status-out");
+    document.getElementById("att-clock-out").onclick = async (e) => {
+      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi tan ca', "err");
+      const now = new Date();
+      const elapsed = (now.getTime() - new Date(openShift.work_date + "T" + openShift.start_time).getTime()) / 3600000;
+      if (elapsed > 12 && !confirm(`Ca đã mở ${elapsed.toFixed(1)}h — khá dài. Chắc chắn tan ca với thời gian hiện tại?`)) return;
+      const nowTime = now.toTimeString().slice(0, 8);
+      e.target.disabled = true;
+      const { error } = await sb.from("biz_attendance").update({
+        end_time: nowTime,
+        lat_out: gps.loc.lat, lng_out: gps.loc.lng, loc_at_out: now.toISOString(),
+      }).eq("id", openShift.id);
+      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+      toast(`Đã tan ca sau ${elapsed.toFixed(1)}h. Chờ Admin duyệt.`, "ok"); leaderAttendance();
+    };
+    document.getElementById("att-cancel-shift").onclick = async () => {
+      if (!confirm("Huỷ ca này? Dữ liệu vào ca (bao gồm GPS) sẽ bị xoá vĩnh viễn.")) return;
+      const { error } = await sb.from("biz_attendance").delete().eq("id", openShift.id);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã huỷ ca", "ok"); leaderAttendance();
+    };
+  } else {
+    // === VÀO CA ===
+    const gps = setupGPS("att-gps", "att-gps-status");
+    document.getElementById("att-clock-in").onclick = async (e) => {
+      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi vào ca', "err");
+      const now = new Date();
+      const nowDate = now.toISOString().slice(0, 10);
+      const nowTime = now.toTimeString().slice(0, 8);
+      e.target.disabled = true;
+      const { error } = await sb.from("biz_attendance").insert({
+        leader_id: me, work_date: nowDate, start_time: nowTime, end_time: null,
+        transport: document.getElementById("att-transport").value,
+        note: document.getElementById("att-note").value.trim(),
+        lat: gps.loc.lat, lng: gps.loc.lng, loc_at: now.toISOString(),
+      });
+      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+      toast(`Đã vào ca lúc ${nowTime.slice(0,5)}`, "ok"); leaderAttendance();
+    };
+  }
   on("[data-attdel]", "click", async (e) => {
     if (!confirm("Xoá khai báo này?")) return;
     const { error } = await sb.from("biz_attendance").delete().eq("id", e.currentTarget.dataset.attdel);
@@ -922,14 +964,14 @@ async function bizAttendance() {
               <td>
                 ${x.start_time.slice(0, 5)}
                 –
-                ${x.end_time.slice(0, 5)}
+                ${x.end_time ? x.end_time.slice(0, 5) : '<span class="meta" style="color:var(--amber)">(đang mở)</span>'}
 
-                <span class="meta">
+                ${x.end_time ? `<span class="meta">
                   (${attDuration(
                     x.start_time,
                     x.end_time
                   ).toFixed(1)}h)
-                </span>
+                </span>` : ''}
               </td>
 
               <td>
@@ -961,9 +1003,14 @@ async function bizAttendance() {
               <td style="white-space:nowrap">
                 ${
                   x.lat != null && x.lng != null
-                    ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Xem</a>`
-                    : '<span class="meta" style="color:var(--amber)">⚠ Không có</span>'
+                    ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="Vào ca: ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Vào</a>`
+                    : '<span class="meta" style="color:var(--amber)">⚠</span>'
+                }${
+                  x.lat_out != null && x.lng_out != null
+                    ? ` · <a href="https://www.google.com/maps?q=${x.lat_out},${x.lng_out}" target="_blank" rel="noopener" title="Tan ca: ${x.lat_out.toFixed(5)}, ${x.lng_out.toFixed(5)}">📍 Tan</a>`
+                    : (x.end_time ? ' · <span class="meta" style="color:var(--amber)">⚠</span>' : '')
                 }
+                ${!x.end_time ? '<div class="meta" style="color:var(--amber)">⏱ Chưa tan ca</div>' : ''}
               </td>
 
               <td style="white-space:nowrap">
@@ -1316,7 +1363,7 @@ async function showAttPayQR(leader, month, rates) {
   const rows = unpaid.map((x) => `<tr>
     <td><input type="checkbox" class="attp-chk" data-id="${x.id}" data-amt="${x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om}" checked/></td>
     <td>${fmtDate(x.work_date)}</td>
-    <td>${x.start_time.slice(0, 5)}–${x.end_time.slice(0, 5)}</td>
+    <td>${x.start_time.slice(0, 5)}–${x.end_time ? x.end_time.slice(0, 5) : "?"}</td>
     <td>${transportLabel(x.transport)}</td>
     <td style="text-align:right"><b>${fmtVND(x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om)}</b></td></tr>`).join("");
   body.innerHTML = `
