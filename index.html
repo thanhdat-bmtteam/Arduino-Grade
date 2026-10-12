@@ -1649,10 +1649,36 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
   if (!a) return;
   showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const { data: resps } = await sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id);
+  const [{ data: resps }, { data: tasks }, { data: projs }] = await Promise.all([
+    sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id),
+    sb.from("biz_tasks").select("project_id,assignee_id"),
+    sb.from("biz_projects").select("id,name"),
+  ]);
   const respByUser = {}; (resps || []).forEach((r) => respByUser[r.user_id] = r);
   const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
-  const recips = (a.recipient_ids || []).map((id) => userById[id]).filter(Boolean);
+  // Map user_id -> danh sách tên dự án (duy nhất, sort)
+  const projNameById = {}; (projs || []).forEach((p) => projNameById[p.id] = p.name);
+  const userProjSet = {};
+  (tasks || []).forEach((t) => {
+    if (!t.assignee_id || !t.project_id || !projNameById[t.project_id]) return;
+    (userProjSet[t.assignee_id] = userProjSet[t.assignee_id] || new Set()).add(projNameById[t.project_id]);
+  });
+  const userProjStr = (uid) => userProjSet[uid] ? [...userProjSet[uid]].sort().join(", ") : "";
+  // Sort recips: theo dự án → role → tên; không có dự án xuống cuối
+  const recips = (a.recipient_ids || []).map((id) => userById[id]).filter(Boolean).sort((x, y) => {
+    const px = userProjStr(x.id), py = userProjStr(y.id);
+    if (!px && py) return 1;
+    if (px && !py) return -1;
+    if (px !== py) return px.localeCompare(py, "vi");
+    if ((x.role || "") !== (y.role || "")) return (x.role || "").localeCompare(y.role || "");
+    return (x.full_name || "").localeCompare(y.full_name || "", "vi");
+  });
+  // Màu badge cho mỗi dự án (hash tên → palette)
+  const projColors = ["#dbeafe", "#fef3c7", "#dcfce7", "#fce7f3", "#e0e7ff", "#fed7aa", "#d1fae5", "#fee2e2", "#ede9fe", "#cffafe"];
+  const projColor = (name) => {
+    let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffffff;
+    return projColors[Math.abs(h) % projColors.length];
+  };
   const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
   const typeLbl = a.type === "schedule_signup" ? "Đã đăng ký" : "Đã đọc";
   let detailBody;
@@ -1667,7 +1693,11 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
       const sel = new Set();
       if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
       const cells = days.map((d) => shifts.map((_, si) => `<td style="text-align:center;${sel.has(`${d}-${si}`) ? "background:#dcfce7;color:#15803d;font-weight:700" : ""}">${sel.has(`${d}-${si}`) ? "✓" : ""}</td>`).join("")).join("");
-      return `<tr><td style="white-space:nowrap">${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span></td>${cells}<td style="text-align:right"><b>${sel.size}</b></td></tr>`;
+      const projStr = userProjStr(u.id);
+      const projCell = projStr
+        ? [...userProjSet[u.id]].sort().map((p) => `<span class="badge" style="background:${projColor(p)};color:#1f2937;font-size:11px;margin-right:3px">${esc(p)}</span>`).join("")
+        : '<span class="meta">—</span>';
+      return `<tr><td style="white-space:nowrap">${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span></td><td style="max-width:200px">${projCell}</td>${cells}<td style="text-align:right"><b>${sel.size}</b></td></tr>`;
     }).join("");
     // Tổng theo slot
     const totals = {};
@@ -1685,13 +1715,14 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
         <button class="btn ghost sm" id="ann-edit">Sửa</button>
         <button class="btn danger sm" id="ann-del">Xoá</button>
       </div>
+      <p class="meta" style="margin:0 0 4px">💡 Các TG cùng dự án đã được nhóm sát nhau (sort theo tên dự án) để dễ xếp lịch chung.</p>
       <div class="table-wrap"><table style="min-width:100%">
         <thead>
-          <tr><th rowspan="2" style="white-space:nowrap">Người nhận</th>${days.map((d) => `<th colspan="${shifts.length}" style="text-align:center;background:#f6f8fc">${dayLbl(d)}</th>`).join("")}<th rowspan="2">Tổng</th></tr>
+          <tr><th rowspan="2" style="white-space:nowrap">Người nhận</th><th rowspan="2">Dự án</th>${days.map((d) => `<th colspan="${shifts.length}" style="text-align:center;background:#f6f8fc">${dayLbl(d)}</th>`).join("")}<th rowspan="2">Tổng</th></tr>
           <tr>${headerCells}</tr>
         </thead>
-        <tbody>${bodyRows || `<tr><td colspan="${days.length * shifts.length + 2}" class="empty">Không có người nhận.</td></tr>`}
-          <tr style="background:#eef1f6;font-weight:600"><td>Tổng người đăng ký</td>${totalCells}<td></td></tr>
+        <tbody>${bodyRows || `<tr><td colspan="${days.length * shifts.length + 3}" class="empty">Không có người nhận.</td></tr>`}
+          <tr style="background:#eef1f6;font-weight:600"><td colspan="2">Tổng người đăng ký</td>${totalCells}<td></td></tr>
         </tbody></table></div>
       <p class="meta" style="margin-top:8px">Đã đăng ký: <b>${(resps || []).filter((r) => r.responded_at).length}/${recips.length}</b> người</p>`;
   } else {
@@ -1717,7 +1748,7 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
     const shifts = a.config.shifts || [];
     const days = (a.config.days || []).slice().sort();
     const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
-    const header = ["Họ tên", "Role", "Email"];
+    const header = ["Dự án", "Họ tên", "Role", "Email"];
     days.forEach((d) => shifts.forEach((s) => header.push(`${dayLbl(d)} ${s.label} (${s.start}-${s.end})`)));
     header.push("Tổng slot");
     const rows = [header];
@@ -1725,7 +1756,7 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
       const r = respByUser[u.id];
       const sel = new Set();
       if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
-      const row = [u.full_name || "", u.role || "", u.email || ""];
+      const row = [userProjStr(u.id), u.full_name || "", u.role || "", u.email || ""];
       days.forEach((d) => shifts.forEach((_, si) => row.push(sel.has(`${d}-${si}`) ? "X" : "")));
       row.push(sel.size);
       rows.push(row);
