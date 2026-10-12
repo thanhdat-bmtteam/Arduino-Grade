@@ -1457,20 +1457,30 @@ async function showAttPayQR(leader, month, rates) {
   };
 }
 
-/* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt ---------- */
+/* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt + Thông báo tuỳ chỉnh ---------- */
+const WEEKDAYS = [
+  { v: 2, s: "T2" }, { v: 3, s: "T3" }, { v: 4, s: "T4" },
+  { v: 5, s: "T5" }, { v: 6, s: "T6" }, { v: 7, s: "T7" }, { v: 8, s: "CN" },
+];
 async function bizNotify() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: tasks, error }, { data: leaders }, { data: projects }] = await Promise.all([
+  const [{ data: tasks, error }, { data: leaders }, { data: projects }, { data: anns }, { data: resps }, { data: allUsers }] = await Promise.all([
     sb.from("biz_tasks").select("*").eq("status", "review").order("updated_at", { ascending: false }),
     sb.from("profiles").select("id,full_name").eq("role", "leader"),
     sb.from("biz_projects").select("id,name"),
+    sb.from("biz_announcements").select("*").order("created_at", { ascending: false }),
+    sb.from("biz_announcement_responses").select("announcement_id,user_id,responded_at,read_at"),
+    sb.from("profiles").select("id,full_name,role,email").in("role", ["leader", "gvhd", "tg", "admin"]),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải thông báo: ${esc(error.message)}</div>`; return; }
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[(l.id || "").toLowerCase()] = l.full_name);
   const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
+  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
   const list = tasks || [];
-  if (!list.length) { bcontent().innerHTML = `<div class="empty"><div class="em">🔔</div><p>Không có phần việc nào đang chờ duyệt.</p></div>`; return; }
-  const rows = list.map((t) => `<div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+  const annList = anns || [];
+  const respByAnn = {}; (resps || []).forEach((r) => { (respByAnn[r.announcement_id] = respByAnn[r.announcement_id] || []).push(r); });
+  const annMap = {}; annList.forEach((a) => annMap[a.id] = a);
+  const taskRows = list.map((t) => `<div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
       <div style="min-width:0">
         <div><b>${esc(leaderById[(t.assignee_id || "").toLowerCase()] || "(không rõ)")}</b> đã hoàn tất <b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}</div>
         <div class="meta">Dự án: ${esc(projById[t.project_id] ? projById[t.project_id].name : "(đã xoá)")} · ${fmtDT(t.updated_at)}</div>
@@ -1479,7 +1489,30 @@ async function bizNotify() {
         <button class="btn success sm" data-ntapprove="${t.id}">✓ Duyệt</button>
         <button class="btn danger sm" data-ntrevise="${t.id}">Yêu cầu sửa</button>
       </div></div>`).join("");
-  bcontent().innerHTML = `<p class="meta" style="margin:0 0 10px">Có <b>${list.length}</b> phần việc chờ duyệt. Duyệt hoặc yêu cầu sửa xong thì thông báo tự ẩn.</p>${rows}`;
+  const annRows = annList.map((a) => {
+    const nResp = (respByAnn[a.id] || []).filter((r) => r.responded_at).length;
+    const nRecip = (a.recipient_ids || []).length;
+    const typeBadge = a.type === "schedule_signup"
+      ? '<span class="badge amber">📅 Đăng ký lịch</span>'
+      : '<span class="badge blue">💬 Thông báo</span>';
+    const deadlineInfo = a.deadline ? ` · HSD: <b>${fmtDT(a.deadline)}</b>` : "";
+    return `<div class="card" style="cursor:pointer" data-annopen="${a.id}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
+        <div style="font-weight:700">${esc(a.title)} ${typeBadge}</div>
+        <span class="meta">${fmtDT(a.created_at)}${deadlineInfo}</span>
+      </div>
+      <div class="meta" style="margin-top:4px">👥 Gửi cho ${nRecip} người${a.type === "schedule_signup" ? ` · <b style="color:${nResp === nRecip ? "var(--green)" : "var(--amber)"}">${nResp}/${nRecip}</b> đã đăng ký` : ""}</div>
+      ${a.content ? `<div style="margin-top:6px;color:var(--ink-2);white-space:pre-wrap">${esc(a.content).slice(0, 160)}${a.content.length > 160 ? "..." : ""}</div>` : ""}
+    </div>`;
+  }).join("");
+  bcontent().innerHTML = `
+    <h3 style="margin:0 0 8px;font-size:1.05rem">🔔 Phần việc chờ duyệt (${list.length})</h3>
+    ${taskRows || `<div class="empty"><div class="em">✓</div><p>Không có phần việc nào đang chờ duyệt.</p></div>`}
+    <div style="margin:18px 0 10px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
+      <h3 style="margin:0;font-size:1.05rem">📣 Thông báo tuỳ chỉnh (${annList.length})</h3>
+      <button class="btn" id="ann-new">＋ Tạo thông báo</button>
+    </div>
+    ${annRows || `<div class="empty"><div class="em">📭</div><p>Chưa có thông báo nào. Bấm "Tạo thông báo" để gửi lịch học, hỏi ý kiến, ...</p></div>`}`;
   on("[data-ntapprove]", "click", async (e) => {
     const { error } = await sb.from("biz_tasks").update({ status: "done", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.ntapprove);
     if (error) return toast("Lỗi: " + error.message, "err");
@@ -1492,6 +1525,309 @@ async function bizNotify() {
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã gửi yêu cầu chỉnh sửa", "ok"); bizHome();
   }, bcontent());
+  document.getElementById("ann-new").onclick = () => openAnnouncementModal(null, allUsers || []);
+  on("[data-annopen]", "click", (e) => viewAnnouncementAdmin(annMap[e.currentTarget.dataset.annopen], allUsers || []), bcontent());
+}
+
+/* === Modal tạo/sửa Thông báo === */
+function openAnnouncementModal(ex, allUsers) {
+  ex = ex || {};
+  const isEdit = !!ex.id;
+  const type = ex.type || "text";
+  const cfg = ex.config || { shifts: [{ label: "Ca 1", start: "19:00", end: "20:30" }], days: [2,3,4,5,6,7,8] };
+  const recipSet = new Set(ex.recipient_ids || []);
+  const groupedUsers = { admin: [], leader: [], gvhd: [], tg: [] };
+  (allUsers || []).forEach((u) => { if (groupedUsers[u.role]) groupedUsers[u.role].push(u); });
+  const roleLbl = { admin: "Admin", leader: "Leader", gvhd: "GVHD", tg: "Tác giả" };
+  const userCheckboxes = Object.keys(groupedUsers).map((r) => {
+    if (!groupedUsers[r].length) return "";
+    return `<details ${recipSet.size === 0 ? "" : "open"} style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600">${roleLbl[r]} <button type="button" class="btn ghost sm" data-selall="${r}" style="margin-left:6px">Chọn tất cả</button><button type="button" class="btn ghost sm" data-selnone="${r}">Bỏ chọn</button></summary>
+      <div style="padding:6px 0 0 10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px">
+        ${groupedUsers[r].map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:.9rem"><input type="checkbox" class="ann-recip" data-role="${r}" value="${u.id}" ${recipSet.has(u.id) ? "checked" : ""}/> ${esc(u.full_name || u.email || "(?)")}</label>`).join("")}
+      </div></details>`;
+  }).join("");
+  const shiftRows = (cfg.shifts || []).map((s, i) => renderShiftRow(s, i)).join("");
+  const dayChecks = WEEKDAYS.map((d) => `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;cursor:pointer"><input type="checkbox" class="ann-day" value="${d.v}" ${(cfg.days || []).includes(d.v) ? "checked" : ""}/> ${d.s}</label>`).join("");
+  showModal(isEdit ? "Sửa thông báo" : "Tạo thông báo", `
+    <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
+    <div class="field"><label>Loại *</label><select id="ann-type">
+      <option value="text" ${type === "text" ? "selected" : ""}>💬 Thông báo thường (chỉ đọc)</option>
+      <option value="schedule_signup" ${type === "schedule_signup" ? "selected" : ""}>📅 Đăng ký lịch học (user tick ngày + ca)</option>
+    </select></div>
+    <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="4" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
+    <div class="field"><label>Link đính kèm (Google Meet, Drive, ...)</label><input id="ann-link" value="${esc(ex.link_url || "")}" placeholder="https://meet.google.com/..."/></div>
+    <div class="field"><label>Hạn chót (không bắt buộc)</label><input id="ann-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/></div>
+    <div id="ann-schedule-cfg" style="display:${type === "schedule_signup" ? "block" : "none"};border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0">
+      <div style="font-weight:600;margin-bottom:6px">⚙ Cấu hình lịch học</div>
+      <div style="font-size:.9rem;margin-bottom:4px">Các ca:</div>
+      <div id="ann-shifts">${shiftRows}</div>
+      <button type="button" class="btn ghost sm" id="ann-addshift" style="margin-top:4px">＋ Thêm ca</button>
+      <div style="font-size:.9rem;margin:10px 0 4px">Mở các ngày:</div>
+      <div>${dayChecks}</div>
+    </div>
+    <div class="field"><label>Người nhận * (chọn 1 hoặc nhiều)</label>
+      <div style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
+      <div style="margin-top:4px"><span class="meta" id="ann-recip-count">Đã chọn: 0</span></div>
+    </div>`,
+    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="ann-save">${isEdit ? "Lưu" : "Gửi"}</button>`, "lg");
+  const typeEl = document.getElementById("ann-type");
+  const schedCfg = document.getElementById("ann-schedule-cfg");
+  typeEl.onchange = () => { schedCfg.style.display = typeEl.value === "schedule_signup" ? "block" : "none"; };
+  const shiftsEl = document.getElementById("ann-shifts");
+  document.getElementById("ann-addshift").onclick = () => {
+    const n = shiftsEl.querySelectorAll(".ann-shift").length;
+    shiftsEl.insertAdjacentHTML("beforeend", renderShiftRow({ label: `Ca ${n+1}`, start: "20:30", end: "22:00" }, n));
+    bindShiftRemove();
+  };
+  const bindShiftRemove = () => {
+    shiftsEl.querySelectorAll("[data-rmshift]").forEach((b) => {
+      b.onclick = () => { b.closest(".ann-shift").remove(); };
+    });
+  };
+  bindShiftRemove();
+  const updCount = () => {
+    const n = document.querySelectorAll(".ann-recip:checked").length;
+    document.getElementById("ann-recip-count").textContent = `Đã chọn: ${n}`;
+  };
+  updCount();
+  modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ann-recip")) updCount(); });
+  modalRoot().querySelectorAll("[data-selall]").forEach((b) => {
+    b.onclick = () => { modalRoot().querySelectorAll(`.ann-recip[data-role="${b.dataset.selall}"]`).forEach((c) => c.checked = true); updCount(); };
+  });
+  modalRoot().querySelectorAll("[data-selnone]").forEach((b) => {
+    b.onclick = () => { modalRoot().querySelectorAll(`.ann-recip[data-role="${b.dataset.selnone}"]`).forEach((c) => c.checked = false); updCount(); };
+  });
+  document.getElementById("ann-save").onclick = async (e) => {
+    const title = document.getElementById("ann-title").value.trim();
+    if (!title) return toast("Nhập tiêu đề", "err");
+    const type = typeEl.value;
+    const recipIds = [...document.querySelectorAll(".ann-recip:checked")].map((c) => c.value);
+    if (!recipIds.length) return toast("Chọn ít nhất 1 người nhận", "err");
+    let config = null;
+    if (type === "schedule_signup") {
+      const shifts = [...shiftsEl.querySelectorAll(".ann-shift")].map((row) => ({
+        label: row.querySelector(".sh-label").value.trim() || "Ca",
+        start: row.querySelector(".sh-start").value,
+        end: row.querySelector(".sh-end").value,
+      })).filter((s) => s.start && s.end);
+      const days = [...document.querySelectorAll(".ann-day:checked")].map((c) => Number(c.value));
+      if (!shifts.length) return toast("Cần ít nhất 1 ca", "err");
+      if (!days.length) return toast("Chọn ít nhất 1 ngày trong tuần", "err");
+      config = { shifts, days };
+    }
+    const dl = document.getElementById("ann-deadline").value;
+    const payload = {
+      title, content: document.getElementById("ann-content").value.trim(),
+      type, config, link_url: document.getElementById("ann-link").value.trim() || null,
+      recipient_ids: recipIds,
+      deadline: dl ? new Date(dl).toISOString() : null,
+    };
+    e.target.disabled = true;
+    if (isEdit) {
+      const { error } = await sb.from("biz_announcements").update(payload).eq("id", ex.id);
+      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    } else {
+      payload.created_by = state.profile.id;
+      const { error } = await sb.from("biz_announcements").insert(payload);
+      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    }
+    toast(isEdit ? "Đã lưu" : `Đã gửi tới ${recipIds.length} người`, "ok");
+    closeModal(); bizNotify();
+  };
+}
+function renderShiftRow(s, i) {
+  return `<div class="ann-shift row" style="gap:6px;align-items:center;margin-bottom:4px">
+    <input class="sh-label" value="${esc(s.label || "")}" placeholder="Tên ca" style="flex:1;min-width:100px"/>
+    <input class="sh-start" type="time" value="${esc(s.start || "")}" style="width:110px"/>
+    <span>–</span>
+    <input class="sh-end" type="time" value="${esc(s.end || "")}" style="width:110px"/>
+    <button type="button" class="btn danger sm" data-rmshift>✕</button>
+  </div>`;
+}
+
+/* === Admin xem chi tiết + responses === */
+async function viewAnnouncementAdmin(a, allUsers) {
+  if (!a) return;
+  showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  const body = modalRoot().querySelector(".modal-body");
+  const { data: resps } = await sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id);
+  const respByUser = {}; (resps || []).forEach((r) => respByUser[r.user_id] = r);
+  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
+  const recips = (a.recipient_ids || []).map((id) => userById[id]).filter(Boolean);
+  const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
+  const typeLbl = a.type === "schedule_signup" ? "Đã đăng ký" : "Đã đọc";
+  let detailBody;
+  if (a.type === "schedule_signup" && a.config) {
+    const shifts = a.config.shifts || [];
+    const days = (a.config.days || []).slice().sort();
+    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
+    // bảng tổng hợp: hàng = user, cột = (day × shift)
+    const headerCells = days.map((d) => shifts.map((_, si) => `<th>${dayLbl(d)}<br><span class="meta" style="font-weight:normal">${esc(shifts[si].label)}</span></th>`).join("")).join("");
+    const bodyRows = recips.map((u) => {
+      const r = respByUser[u.id];
+      const sel = new Set();
+      if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
+      const cells = days.map((d) => shifts.map((_, si) => `<td style="text-align:center;${sel.has(`${d}-${si}`) ? "background:#dcfce7;color:#15803d;font-weight:700" : ""}">${sel.has(`${d}-${si}`) ? "✓" : ""}</td>`).join("")).join("");
+      return `<tr><td style="white-space:nowrap">${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span></td>${cells}<td style="text-align:right"><b>${sel.size}</b></td></tr>`;
+    }).join("");
+    // Tổng theo slot
+    const totals = {};
+    (resps || []).forEach((r) => { if (Array.isArray(r.response)) r.response.forEach((x) => { const k = `${x.day}-${x.shift}`; totals[k] = (totals[k] || 0) + 1; }); });
+    const totalCells = days.map((d) => shifts.map((_, si) => {
+      const n = totals[`${d}-${si}`] || 0;
+      return `<td style="text-align:center;background:#f6f8fc"><b style="color:${n > 0 ? "var(--green)" : "var(--muted)"}">${n}</b></td>`;
+    }).join("")).join("");
+    detailBody = `
+      ${a.content ? `<p style="white-space:pre-wrap;margin:0 0 10px">${esc(a.content)}</p>` : ""}
+      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
+      ${a.deadline ? `<p class="meta">⏰ Hạn chót: <b>${fmtDT(a.deadline)}</b></p>` : ""}
+      <div class="row" style="gap:8px;margin:10px 0 6px">
+        <button class="btn secondary sm" id="ann-csv">⬇ Xuất CSV kết quả</button>
+        <button class="btn ghost sm" id="ann-edit">Sửa</button>
+        <button class="btn danger sm" id="ann-del">Xoá</button>
+      </div>
+      <div class="table-wrap"><table style="min-width:100%">
+        <thead>
+          <tr><th rowspan="2" style="white-space:nowrap">Người nhận</th>${days.map((d) => `<th colspan="${shifts.length}" style="text-align:center;background:#f6f8fc">${dayLbl(d)}</th>`).join("")}<th rowspan="2">Tổng</th></tr>
+          <tr>${headerCells}</tr>
+        </thead>
+        <tbody>${bodyRows || `<tr><td colspan="${days.length * shifts.length + 2}" class="empty">Không có người nhận.</td></tr>`}
+          <tr style="background:#eef1f6;font-weight:600"><td>Tổng người đăng ký</td>${totalCells}<td></td></tr>
+        </tbody></table></div>
+      <p class="meta" style="margin-top:8px">Đã đăng ký: <b>${(resps || []).filter((r) => r.responded_at).length}/${recips.length}</b> người</p>`;
+  } else {
+    // Text đơn thuần
+    const readList = recips.map((u) => {
+      const r = respByUser[u.id];
+      return `<li>${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span> — ${r && r.read_at ? `<span class="badge green">✓ Đã đọc ${fmtDT(r.read_at)}</span>` : '<span class="badge gray">Chưa đọc</span>'}</li>`;
+    }).join("");
+    detailBody = `
+      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn chót: <b>${fmtDT(a.deadline)}</b></span>` : ""}
+      ${a.content ? `<p style="white-space:pre-wrap;margin:10px 0">${esc(a.content)}</p>` : ""}
+      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
+      <div class="row" style="gap:8px;margin:10px 0 6px">
+        <button class="btn ghost sm" id="ann-edit">Sửa</button>
+        <button class="btn danger sm" id="ann-del">Xoá</button>
+      </div>
+      <h4 style="margin:12px 0 4px">${typeLbl}</h4>
+      <ul style="margin:0;padding-left:18px">${readList || '<li class="meta">Không có người nhận</li>'}</ul>`;
+  }
+  body.innerHTML = detailBody;
+  const btnCsv = document.getElementById("ann-csv");
+  if (btnCsv) btnCsv.onclick = () => {
+    const shifts = a.config.shifts || [];
+    const days = (a.config.days || []).slice().sort();
+    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
+    const header = ["Họ tên", "Role", "Email"];
+    days.forEach((d) => shifts.forEach((s) => header.push(`${dayLbl(d)} ${s.label} (${s.start}-${s.end})`)));
+    header.push("Tổng slot");
+    const rows = [header];
+    recips.forEach((u) => {
+      const r = respByUser[u.id];
+      const sel = new Set();
+      if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
+      const row = [u.full_name || "", u.role || "", u.email || ""];
+      days.forEach((d) => shifts.forEach((_, si) => row.push(sel.has(`${d}-${si}`) ? "X" : "")));
+      row.push(sel.size);
+      rows.push(row);
+    });
+    downloadCSV(`dang-ky-lich-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`, rows);
+  };
+  document.getElementById("ann-edit").onclick = () => { closeModal(); openAnnouncementModal(a, allUsers); };
+  document.getElementById("ann-del").onclick = async () => {
+    if (!confirm(`Xoá thông báo "${a.title}"? Sẽ xoá luôn các phản hồi của user.`)) return;
+    const { error } = await sb.from("biz_announcements").delete().eq("id", a.id);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã xoá", "ok"); closeModal(); bizNotify();
+  };
+}
+
+/* === Trang Thông báo cho User (Leader/GVHD/TG) === */
+async function userNotifications() {
+  const me = state.profile.id;
+  setContent(`<div class="section-title"><h2>🔔 Thông báo</h2></div><div id="un-body">${loadingHTML()}</div>`);
+  const [{ data: anns, error }, { data: resps }] = await Promise.all([
+    sb.from("biz_announcements").select("*").contains("recipient_ids", [me]).order("created_at", { ascending: false }),
+    sb.from("biz_announcement_responses").select("*").eq("user_id", me),
+  ]);
+  if (error) { document.getElementById("un-body").innerHTML = `<div class="empty">Lỗi: ${esc(error.message)}</div>`; return; }
+  const respByAnn = {}; (resps || []).forEach((r) => respByAnn[r.announcement_id] = r);
+  const list = anns || [];
+  if (!list.length) { document.getElementById("un-body").innerHTML = `<div class="empty"><div class="em">📭</div><p>Chưa có thông báo nào gửi cho bạn.</p></div>`; return; }
+  const annMap = {}; list.forEach((a) => annMap[a.id] = a);
+  const rows = list.map((a) => {
+    const r = respByAnn[a.id];
+    const typeBadge = a.type === "schedule_signup"
+      ? '<span class="badge amber">📅 Đăng ký lịch</span>'
+      : '<span class="badge blue">💬 Thông báo</span>';
+    const status = a.type === "schedule_signup"
+      ? (r && r.responded_at ? '<span class="badge green">✓ Đã đăng ký</span>' : '<span class="badge red">⚠ Chưa đăng ký</span>')
+      : (r && r.read_at ? '<span class="badge green">✓ Đã đọc</span>' : '<span class="badge amber">● Chưa đọc</span>');
+    const deadlineInfo = a.deadline ? ` · HSD: <b style="color:${new Date(a.deadline) < new Date() ? "var(--red)" : "var(--amber)"}">${fmtDT(a.deadline)}</b>` : "";
+    const borderStyle = (a.type === "schedule_signup" && !(r && r.responded_at)) || (a.type === "text" && !(r && r.read_at))
+      ? "border:2px solid var(--amber)" : "";
+    return `<div class="card" style="cursor:pointer;${borderStyle}" data-unopen="${a.id}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
+        <div style="font-weight:700">${esc(a.title)} ${typeBadge}</div>
+        <span>${status}</span>
+      </div>
+      <div class="meta" style="margin-top:4px">${fmtDT(a.created_at)}${deadlineInfo}</div>
+      ${a.content ? `<div style="margin-top:6px;color:var(--ink-2);white-space:pre-wrap">${esc(a.content).slice(0, 160)}${a.content.length > 160 ? "..." : ""}</div>` : ""}
+    </div>`;
+  }).join("");
+  document.getElementById("un-body").innerHTML = rows;
+  on("[data-unopen]", "click", (e) => viewAnnouncementUser(annMap[e.currentTarget.dataset.unopen], respByAnn[e.currentTarget.dataset.unopen]));
+}
+
+async function viewAnnouncementUser(a, existingResp) {
+  if (!a) return;
+  const me = state.profile.id;
+  const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
+  let bodyHTML;
+  if (a.type === "schedule_signup" && a.config) {
+    const shifts = a.config.shifts || [];
+    const days = (a.config.days || []).slice().sort();
+    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
+    const sel = new Set();
+    if (existingResp && Array.isArray(existingResp.response)) existingResp.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
+    const headerCells = shifts.map((s) => `<th>${esc(s.label)}<br><span class="meta" style="font-weight:normal">${s.start}–${s.end}</span></th>`).join("");
+    const bodyRows = days.map((d) => {
+      const cells = shifts.map((_, si) => `<td style="text-align:center;padding:4px"><label style="display:block;cursor:pointer;padding:8px;border-radius:6px;${sel.has(`${d}-${si}`) ? "background:#dcfce7" : ""}"><input type="checkbox" class="un-slot" data-day="${d}" data-shift="${si}" ${sel.has(`${d}-${si}`) ? "checked" : ""} style="transform:scale(1.3)"/></label></td>`).join("");
+      return `<tr><td style="white-space:nowrap;font-weight:600">${dayLbl(d)}</td>${cells}</tr>`;
+    }).join("");
+    bodyHTML = `
+      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn: <b>${fmtDT(a.deadline)}</b></span>` : ""}
+      ${a.content ? `<p style="white-space:pre-wrap;margin:10px 0">${esc(a.content)}</p>` : ""}
+      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
+      <p class="meta" style="margin:10px 0 4px">Tick vào các ô bạn <b>rảnh</b>, có thể học được:</p>
+      <div class="table-wrap"><table><thead><tr><th>Ngày</th>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>
+      ${existingResp && existingResp.responded_at ? `<p class="meta" style="margin-top:6px">Đã lưu lần cuối: ${fmtDT(existingResp.responded_at)}. Bạn có thể sửa và lưu lại.</p>` : ""}`;
+  } else {
+    bodyHTML = `
+      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn: <b>${fmtDT(a.deadline)}</b></span>` : ""}
+      <h3 style="margin:10px 0 6px">${esc(a.title)}</h3>
+      ${a.content ? `<p style="white-space:pre-wrap">${esc(a.content)}</p>` : ""}
+      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}`;
+  }
+  const saveBtn = a.type === "schedule_signup" ? '<button class="btn" id="un-save">💾 Lưu đăng ký</button>' : '';
+  showModal(a.title, bodyHTML, `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>${saveBtn}`, "lg");
+  // Nếu là text, tự động mark as read
+  if (a.type === "text" && !(existingResp && existingResp.read_at)) {
+    await sb.from("biz_announcement_responses").upsert({
+      announcement_id: a.id, user_id: me, read_at: new Date().toISOString()
+    }, { onConflict: "announcement_id,user_id" });
+  }
+  const btn = document.getElementById("un-save");
+  if (btn) btn.onclick = async (e) => {
+    const slots = [...document.querySelectorAll(".un-slot:checked")].map((c) => ({ day: Number(c.dataset.day), shift: Number(c.dataset.shift) }));
+    e.target.disabled = true;
+    const now = new Date().toISOString();
+    const { error } = await sb.from("biz_announcement_responses").upsert({
+      announcement_id: a.id, user_id: me, response: slots, responded_at: now, read_at: now
+    }, { onConflict: "announcement_id,user_id" });
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast(`Đã lưu ${slots.length} slot`, "ok"); closeModal(); userNotifications();
+  };
 }
 
 /* ---------- Bảng giá ---------- */
@@ -1500,19 +1836,58 @@ async function bizPrices() {
   const { data, error } = await sb.from("biz_price_items").select("*").order("created_at", { ascending: false });
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải bảng giá: ${esc(error.message)}</div>`; return; }
   const map = {}; (data || []).forEach((p) => map[p.id] = p);
-  const rows = (data || []).map((p) => `<tr>
+  const rowHTML = (p) => `<tr>
     <td>${esc(p.name)}${p.note ? `<div class="meta">${esc(p.note)}</div>` : ""}${p.category === "service" ? ' <span class="badge blue">Dịch vụ</span>' : ""}</td>
     <td>${esc(p.unit || "")}</td><td><b>${fmtVND(p.price)}</b></td>
     <td style="white-space:nowrap"><button class="btn ghost sm" data-ped="${p.id}">Sửa</button>
-      <button class="btn danger sm" data-pdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></td></tr>`).join("");
+      <button class="btn danger sm" data-pdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></td></tr>`;
+  const rows = (data || []).map(rowHTML).join("");
   bcontent().innerHTML = `
     <div class="pill-row"><button class="btn" id="price-new">＋ Thêm mục</button>
       <button class="btn secondary" id="price-exp">⬇ Export CSV</button>
       <button class="btn secondary" id="price-imp">⬆ Import CSV</button>
       <input type="file" id="price-file" accept=".csv,text/csv" style="display:none"/></div>
-    <p class="meta" style="margin:0 0 8px">Tổng: <b>${(data || []).length}</b> mặt hàng</p>
+    <div class="row" style="align-items:center;gap:8px;margin:6px 0 8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px;position:relative">
+        <input id="price-search" placeholder="🔍 Tìm theo tên, ĐVT, giá, ghi chú..." style="width:100%;padding:9px 36px 9px 12px"/>
+        <button type="button" id="price-search-clear" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);display:none;padding:6px 10px;font-size:1rem">✕</button>
+      </div>
+      <span id="price-search-count" class="meta">Tổng: <b>${(data || []).length}</b> mặt hàng</span>
+    </div>
     <div class="table-wrap"><table><thead><tr><th>Tên</th><th>ĐVT</th><th>Đơn giá</th><th>Thao tác</th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
+    <tbody id="price-tbody">${rows || `<tr><td colspan="4" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
+  // === Tìm kiếm nhanh client-side ===
+  const searchEl = document.getElementById("price-search");
+  const clearBtn = document.getElementById("price-search-clear");
+  const countEl = document.getElementById("price-search-count");
+  const tbody = document.getElementById("price-tbody");
+  const total = (data || []).length;
+  const idx = (data || []).map((p) => ({
+    p,
+    hay: removeVN([
+      p.name || "", p.unit || "", p.note || "",
+      p.category === "service" ? "dịch vụ gia công service" : "linh kien linh kiện item",
+      String(p.price || ""), fmtVND(p.price || 0),
+    ].join(" ")).toLowerCase(),
+  }));
+  const doFilter = () => {
+    const q = removeVN((searchEl.value || "").trim()).toLowerCase();
+    if (!q) {
+      tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Chưa có mục nào.</td></tr>`;
+      countEl.innerHTML = `Tổng: <b>${total}</b> mặt hàng`;
+      clearBtn.style.display = "none";
+      return;
+    }
+    const terms = q.split(/\s+/).filter(Boolean);
+    const hits = idx.filter(({ hay }) => terms.every((t) => hay.includes(t))).map(({ p }) => p);
+    tbody.innerHTML = hits.length
+      ? hits.map(rowHTML).join("")
+      : `<tr><td colspan="4" class="empty">Không tìm thấy mục khớp "${esc(searchEl.value)}".</td></tr>`;
+    countEl.innerHTML = `Tìm thấy <b>${hits.length}</b>/${total} mặt hàng`;
+    clearBtn.style.display = "block";
+  };
+  searchEl.oninput = doFilter;
+  clearBtn.onclick = () => { searchEl.value = ""; doFilter(); searchEl.focus(); };
   document.getElementById("price-new").onclick = () => openPriceModal();
   document.getElementById("price-exp").onclick = () => {
     const r = [["Tên", "ĐVT", "Đơn giá", "Loại", "Ghi chú"]];
@@ -1581,20 +1956,28 @@ async function bizInvoices() {
   const { data, error } = await sb.from("biz_invoices").select("*").order("updated_at", { ascending: false });
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải hoá đơn: ${esc(error.message)}</div>`; return; }
   const map = {}; (data || []).forEach((iv) => map[iv.id] = iv);
-  const rows = (data || []).map((iv) => `<tr style="cursor:pointer" data-ivopen="${iv.id}">
+  const rowHTML = (iv) => `<tr style="cursor:pointer" data-ivopen="${iv.id}">
     <td>${esc(iv.customer || "(chưa có)")}${iv.project_name ? `<div class="meta">${esc(iv.project_name)}</div>` : ""}</td>
     <td>${fmtDate(iv.invoice_date)}</td>
     <td><b>${fmtVND(iv.total)}</b></td>
     <td style="white-space:nowrap"><button class="btn ghost sm" data-ivexp="${iv.id}">Xuất</button>
       <button class="btn ghost sm" data-ived="${iv.id}">Sửa</button>
-      <button class="btn danger sm" data-ivdel="${iv.id}">Xoá</button></td></tr>`).join("");
+      <button class="btn danger sm" data-ivdel="${iv.id}">Xoá</button></td></tr>`;
+  const rows = (data || []).map(rowHTML).join("");
   bcontent().innerHTML = `
     <div class="pill-row"><button class="btn" id="inv-new">＋ Tạo hoá đơn (gốc)</button>
       <button class="btn secondary" id="inv-cust">👥 Khách quen</button>
       <button class="btn secondary" id="inv-gc">⚙ Đơn giá gia công</button>
       <button class="btn secondary" id="inv-csv">⬇ Danh sách (CSV)</button></div>
+    <div class="row" style="align-items:center;gap:8px;margin:6px 0 10px;flex-wrap:wrap">
+      <div style="flex:1;min-width:240px;position:relative">
+        <input id="inv-search" placeholder="🔍 Tìm theo khách, dự án, số tiền, ngày (dd/mm/yyyy)..." style="width:100%;padding:9px 36px 9px 12px"/>
+        <button type="button" id="inv-search-clear" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);display:none;padding:6px 10px;font-size:1rem">✕</button>
+      </div>
+      <span id="inv-search-count" class="meta"></span>
+    </div>
     <div class="table-wrap"><table><thead><tr><th>Khách / Dự án</th><th>Ngày</th><th>Tổng (gốc)</th><th>Thao tác</th></tr></thead>
-    <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn. Bấm "Tạo hoá đơn".</td></tr>`}</tbody></table></div>`;
+    <tbody id="inv-tbody">${rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn. Bấm "Tạo hoá đơn".</td></tr>`}</tbody></table></div>`;
   document.getElementById("inv-new").onclick = () => openInvoiceModal();
   document.getElementById("inv-cust").onclick = () => bizCustomers();
   document.getElementById("inv-gc").onclick = () => giaCongSettings();
@@ -1603,6 +1986,42 @@ async function bizInvoices() {
     (data || []).forEach((iv) => r.push([iv.customer || "", iv.project_name || "", iv.invoice_date || "", iv.total]));
     downloadCSV("hoa-don.csv", r);
   };
+  // === Tìm kiếm nhanh client-side ===
+  const searchEl = document.getElementById("inv-search");
+  const clearBtn = document.getElementById("inv-search-clear");
+  const countEl = document.getElementById("inv-search-count");
+  const tbody = document.getElementById("inv-tbody");
+  // Precompute searchable text per invoice (lowercased, bỏ dấu TV)
+  const idx = (data || []).map((iv) => ({
+    iv,
+    hay: removeVN([
+      iv.customer || "",
+      iv.project_name || "",
+      String(iv.total || ""),
+      fmtVND(iv.total || 0),
+      fmtDate(iv.invoice_date || ""),
+      (iv.invoice_date || "").slice(0, 10),
+    ].join(" ")).toLowerCase(),
+  }));
+  const doFilter = () => {
+    const q = removeVN((searchEl.value || "").trim()).toLowerCase();
+    if (!q) {
+      tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn.</td></tr>`;
+      countEl.textContent = "";
+      clearBtn.style.display = "none";
+      return;
+    }
+    // Hỗ trợ nhiều từ khoá: tất cả phải khớp
+    const terms = q.split(/\s+/).filter(Boolean);
+    const hits = idx.filter(({ hay }) => terms.every((t) => hay.includes(t))).map(({ iv }) => iv);
+    tbody.innerHTML = hits.length
+      ? hits.map(rowHTML).join("")
+      : `<tr><td colspan="4" class="empty">Không tìm thấy hoá đơn khớp "${esc(searchEl.value)}".</td></tr>`;
+    countEl.innerHTML = `Tìm thấy <b>${hits.length}</b>/${(data || []).length} hoá đơn`;
+    clearBtn.style.display = "block";
+  };
+  searchEl.oninput = doFilter;
+  clearBtn.onclick = () => { searchEl.value = ""; doFilter(); searchEl.focus(); };
   on("[data-ivopen]", "click", (e) => { if (e.target.dataset.ived || e.target.dataset.ivdel || e.target.dataset.ivexp) return; invoiceDetail(map[e.currentTarget.dataset.ivopen]); }, bcontent());
   on("[data-ivexp]", "click", (e) => { e.stopPropagation(); exportInvoiceModal(map[e.currentTarget.dataset.ivexp]); }, bcontent());
   on("[data-ived]", "click", (e) => { e.stopPropagation(); openInvoiceModal(map[e.currentTarget.dataset.ived]); }, bcontent());
@@ -3463,6 +3882,7 @@ function render() {
     "my-tasks": leaderTasks,
     "my-att": leaderAttendance,
     "my-projects": guestProjects,
+    "my-notify": userNotifications,
   };
   const fn = map[v];
   if (!fn) return routeDefault();
@@ -3641,9 +4061,9 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
-  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["my-att", "Chấm công", "🕒"]];
+  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["my-att", "Chấm công", "🕒"], ["my-notify", "Thông báo", "🔔"]];
   if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
-  if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"]];
+  if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"], ["my-notify", "Thông báo", "🔔"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
   return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
 }
@@ -3651,7 +4071,7 @@ function renderShell() {
   const items = navItems();
   const activeTop = state.view === "class" ? state.params._from : state.view;
   const nav = items.map(([v, label, ic]) =>
-    `<button class="navlink ${activeTop === v ? "active" : ""}" data-go="${v}"><span class="ic">${ic}</span>${esc(label)}</button>`
+    `<button class="navlink ${activeTop === v ? "active" : ""}" data-go="${v}"><span class="ic">${ic}</span>${esc(label)}${v === "my-notify" ? ' <span id="un-badge"></span>' : ""}</button>`
   ).join("");
   setHTML(`
     <div class="topbar">
@@ -3676,6 +4096,23 @@ function renderShell() {
   on('[data-go]', "click", (e) => { go(e.currentTarget.dataset.go); });
   document.getElementById("logout").onclick = doLogout;
   document.getElementById("changepw").onclick = () => openChangePassword();
+  // Badge thông báo chưa đọc / chưa đăng ký
+  if (["leader", "gvhd", "tg"].includes(state.profile.role)) {
+    (async () => {
+      const me = state.profile.id;
+      const [{ data: anns }, { data: resps }] = await Promise.all([
+        sb.from("biz_announcements").select("id,type").contains("recipient_ids", [me]),
+        sb.from("biz_announcement_responses").select("announcement_id,read_at,responded_at").eq("user_id", me),
+      ]);
+      const rmap = {}; (resps || []).forEach((r) => rmap[r.announcement_id] = r);
+      const n = (anns || []).filter((a) => {
+        const r = rmap[a.id];
+        return a.type === "schedule_signup" ? !(r && r.responded_at) : !(r && r.read_at);
+      }).length;
+      const el = document.getElementById("un-badge");
+      if (el && n > 0) el.innerHTML = `<span class="badge red" style="margin-left:4px">${n}</span>`;
+    })().catch(() => {});
+  }
   const sidebar = document.getElementById("sidebar"), bd = document.getElementById("bd");
   document.getElementById("burger").onclick = () => { sidebar.classList.add("open"); bd.classList.remove("hidden"); };
   bd.onclick = () => { sidebar.classList.remove("open"); bd.classList.add("hidden"); };
