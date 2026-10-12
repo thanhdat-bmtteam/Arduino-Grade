@@ -131,13 +131,13 @@ td .btn{margin-right:6px}
 
 /* ---------- modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(15,27,45,.5);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px}
-.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:560px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .modal.lg{max-width:780px}
-.modal-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--line)}
+.modal-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--line);flex-shrink:0}
 .modal-head h3{margin:0;font-size:18px}
 .modal-head .x{border:none;background:transparent;font-size:24px;cursor:pointer;color:var(--muted);line-height:1}
-.modal-body{padding:22px}
-.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
+.modal-body{padding:22px;overflow-y:auto;flex:1;min-height:0}
+.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;flex-shrink:0;background:#fff}
 
 /* ---------- toast ---------- */
 #toasts{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:10px}
@@ -1549,12 +1549,15 @@ function openAnnouncementModal(ex, allUsers) {
   const shiftRows = (cfg.shifts || []).map((s, i) => renderShiftRow(s, i)).join("");
   const dayChecks = WEEKDAYS.map((d) => `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;cursor:pointer"><input type="checkbox" class="ann-day" value="${d.v}" ${(cfg.days || []).includes(d.v) ? "checked" : ""}/> ${d.s}</label>`).join("");
   showModal(isEdit ? "Sửa thông báo" : "Tạo thông báo", `
-    <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
     <div class="field"><label>Loại *</label><select id="ann-type">
       <option value="text" ${type === "text" ? "selected" : ""}>💬 Thông báo thường (chỉ đọc)</option>
       <option value="schedule_signup" ${type === "schedule_signup" ? "selected" : ""}>📅 Đăng ký lịch học (user tick ngày + ca)</option>
     </select></div>
-    <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="4" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
+    <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
+    <div class="field"><label>Người nhận * <span id="ann-recip-count" style="color:var(--blue-d);font-weight:600">(0 đã chọn)</span></label>
+      <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
+    </div>
+    <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="3" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
     <div class="field"><label>Link đính kèm (Google Meet, Drive, ...)</label><input id="ann-link" value="${esc(ex.link_url || "")}" placeholder="https://meet.google.com/..."/></div>
     <div class="field"><label>Hạn chót (không bắt buộc)</label><input id="ann-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/></div>
     <div id="ann-schedule-cfg" style="display:${type === "schedule_signup" ? "block" : "none"};border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0">
@@ -1564,10 +1567,6 @@ function openAnnouncementModal(ex, allUsers) {
       <button type="button" class="btn ghost sm" id="ann-addshift" style="margin-top:4px">＋ Thêm ca</button>
       <div style="font-size:.9rem;margin:10px 0 4px">Mở các ngày:</div>
       <div>${dayChecks}</div>
-    </div>
-    <div class="field"><label>Người nhận * (chọn 1 hoặc nhiều)</label>
-      <div style="max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
-      <div style="margin-top:4px"><span class="meta" id="ann-recip-count">Đã chọn: 0</span></div>
     </div>`,
     `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="ann-save">${isEdit ? "Lưu" : "Gửi"}</button>`, "lg");
   const typeEl = document.getElementById("ann-type");
@@ -1587,7 +1586,7 @@ function openAnnouncementModal(ex, allUsers) {
   bindShiftRemove();
   const updCount = () => {
     const n = document.querySelectorAll(".ann-recip:checked").length;
-    document.getElementById("ann-recip-count").textContent = `Đã chọn: ${n}`;
+    document.getElementById("ann-recip-count").textContent = `(${n} đã chọn)`;
   };
   updCount();
   modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ann-recip")) updCount(); });
