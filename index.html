@@ -1525,12 +1525,12 @@ async function bizNotify() {
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã gửi yêu cầu chỉnh sửa", "ok"); bizHome();
   }, bcontent());
-  document.getElementById("ann-new").onclick = () => openAnnouncementModal(null, allUsers || []);
-  on("[data-annopen]", "click", (e) => viewAnnouncementAdmin(annMap[e.currentTarget.dataset.annopen], allUsers || []), bcontent());
+  document.getElementById("ann-new").onclick = () => openBizAnnouncementModal(null, allUsers || []);
+  on("[data-annopen]", "click", (e) => viewBizAnnouncementAdmin(annMap[e.currentTarget.dataset.annopen], allUsers || []), bcontent());
 }
 
 /* === Modal tạo/sửa Thông báo === */
-function openAnnouncementModal(ex, allUsers) {
+function openBizAnnouncementModal(ex, allUsers) {
   ex = ex || {};
   const isEdit = !!ex.id;
   const type = ex.type || "text";
@@ -1645,7 +1645,7 @@ function renderShiftRow(s, i) {
 }
 
 /* === Admin xem chi tiết + responses === */
-async function viewAnnouncementAdmin(a, allUsers) {
+async function viewBizAnnouncementAdmin(a, allUsers) {
   if (!a) return;
   showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
@@ -1732,7 +1732,7 @@ async function viewAnnouncementAdmin(a, allUsers) {
     });
     downloadCSV(`dang-ky-lich-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`, rows);
   };
-  document.getElementById("ann-edit").onclick = () => { closeModal(); openAnnouncementModal(a, allUsers); };
+  document.getElementById("ann-edit").onclick = () => { closeModal(); openBizAnnouncementModal(a, allUsers); };
   document.getElementById("ann-del").onclick = async () => {
     if (!confirm(`Xoá thông báo "${a.title}"? Sẽ xoá luôn các phản hồi của user.`)) return;
     const { error } = await sb.from("biz_announcements").delete().eq("id", a.id);
@@ -1775,10 +1775,10 @@ async function userNotifications() {
     </div>`;
   }).join("");
   document.getElementById("un-body").innerHTML = rows;
-  on("[data-unopen]", "click", (e) => viewAnnouncementUser(annMap[e.currentTarget.dataset.unopen], respByAnn[e.currentTarget.dataset.unopen]));
+  on("[data-unopen]", "click", (e) => viewBizAnnouncementUser(annMap[e.currentTarget.dataset.unopen], respByAnn[e.currentTarget.dataset.unopen]));
 }
 
-async function viewAnnouncementUser(a, existingResp) {
+async function viewBizAnnouncementUser(a, existingResp) {
   if (!a) return;
   const me = state.profile.id;
   const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
