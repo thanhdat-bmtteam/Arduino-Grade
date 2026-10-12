@@ -1649,16 +1649,21 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
   if (!a) return;
   showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const [{ data: resps }, { data: tasks }, { data: projs }] = await Promise.all([
+  const [{ data: resps }, { data: tasks }, { data: projs }, { data: members }] = await Promise.all([
     sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id),
     sb.from("biz_tasks").select("project_id,assignee_id"),
     sb.from("biz_projects").select("id,name"),
+    sb.from("biz_project_members").select("project_id,profile_id"),
   ]);
   const respByUser = {}; (resps || []).forEach((r) => respByUser[r.user_id] = r);
   const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
-  // Map user_id -> danh sách tên dự án (duy nhất, sort)
+  // Map user_id -> danh sách tên dự án (duy nhất, sort). Nguồn: biz_project_members (TG/GVHD) + biz_tasks (Leader)
   const projNameById = {}; (projs || []).forEach((p) => projNameById[p.id] = p.name);
   const userProjSet = {};
+  (members || []).forEach((m) => {
+    if (!m.profile_id || !m.project_id || !projNameById[m.project_id]) return;
+    (userProjSet[m.profile_id] = userProjSet[m.profile_id] || new Set()).add(projNameById[m.project_id]);
+  });
   (tasks || []).forEach((t) => {
     if (!t.assignee_id || !t.project_id || !projNameById[t.project_id]) return;
     (userProjSet[t.assignee_id] = userProjSet[t.assignee_id] || new Set()).add(projNameById[t.project_id]);
