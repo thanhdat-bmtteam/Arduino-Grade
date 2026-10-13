@@ -1539,18 +1539,19 @@ async function openBizAnnouncementModal(ex, allUsers) {
   const groupedUsers = { admin: [], leader: [], gvhd: [], tg: [] };
   (allUsers || []).forEach((u) => { if (groupedUsers[u.role]) groupedUsers[u.role].push(u); });
   const roleLbl = { admin: "Admin", leader: "Leader", gvhd: "GVHD", tg: "Tác giả" };
-  // Load các dự án đang chạy + members để tạo nút tiện ích "Thêm Leader dạy + TG của dự án"
-  const [{ data: activeProjs }, { data: pjMembers }] = await Promise.all([
-    sb.from("biz_projects").select("id,name,teaching_leader_id").is("completed_at", null),
+  // Load tất cả dự án + members để tạo nút tiện ích "Thêm Leader dạy + TG của tất cả dự án"
+  // (không filter completed_at vì "hoàn thành" là xong SP+thanh toán, không liên quan dạy học)
+  const [{ data: allProjs }, { data: pjMembers }] = await Promise.all([
+    sb.from("biz_projects").select("id,name,teaching_leader_id"),
     sb.from("biz_project_members").select("project_id,profile_id"),
   ]);
-  // Gom các user cần auto-select: tất cả teaching_leader_id + tất cả TG của dự án đang chạy
+  // Gom các user cần auto-select: tất cả teaching_leader_id + tất cả TG của mọi dự án
   const autoSelectIds = new Set();
-  (activeProjs || []).forEach((p) => { if (p.teaching_leader_id) autoSelectIds.add(p.teaching_leader_id); });
-  const activeProjIds = new Set((activeProjs || []).map((p) => p.id));
+  (allProjs || []).forEach((p) => { if (p.teaching_leader_id) autoSelectIds.add(p.teaching_leader_id); });
+  const allProjIds = new Set((allProjs || []).map((p) => p.id));
   const userRole = {}; (allUsers || []).forEach((u) => userRole[u.id] = u.role);
   (pjMembers || []).forEach((m) => {
-    if (!activeProjIds.has(m.project_id)) return;
+    if (!allProjIds.has(m.project_id)) return;
     if (userRole[m.profile_id] === "tg") autoSelectIds.add(m.profile_id);
   });
   const userCheckboxes = Object.keys(groupedUsers).map((r) => {
@@ -1569,7 +1570,7 @@ async function openBizAnnouncementModal(ex, allUsers) {
     </select></div>
     <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
     <div class="field"><label>Người nhận * <span id="ann-recip-count" style="color:var(--blue-d);font-weight:600">(0 đã chọn)</span></label>
-      <div style="margin-bottom:6px"><button type="button" class="btn secondary sm" id="ann-add-project-users">✨ Thêm Leader dạy + TG của ${(activeProjs || []).length} dự án đang chạy (${autoSelectIds.size} người)</button></div>
+      <div style="margin-bottom:6px"><button type="button" class="btn secondary sm" id="ann-add-project-users">✨ Thêm Leader dạy + TG của tất cả ${(allProjs || []).length} dự án (${autoSelectIds.size} người)</button></div>
       <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
     </div>
     <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="3" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
@@ -1613,7 +1614,7 @@ async function openBizAnnouncementModal(ex, allUsers) {
     // Mở các details có user được check
     document.querySelectorAll(".ann-recip:checked").forEach((cb) => { const d = cb.closest("details"); if (d) d.open = true; });
     updCount();
-    toast(`Đã chọn thêm ${added} người (Leader dạy + TG của các dự án đang chạy)`, "ok");
+    toast(`Đã chọn thêm ${added} người (Leader dạy + TG của tất cả dự án)`, "ok");
   };
   modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ann-recip")) updCount(); });
   modalRoot().querySelectorAll("[data-selall]").forEach((b) => {
@@ -1872,15 +1873,16 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
     userSlots[u.id] = set;
   });
 
-  // Dự án LIÊN QUAN đến thông báo = chưa hoàn thành + có Leader hoặc TG nằm trong danh sách nhận
+  // Dự án LIÊN QUAN = có Leader dạy hoặc TG nằm trong danh sách nhận TB (không quan tâm completed_at vì "hoàn thành" là xong SP+thanh toán, không liên quan dạy học)
   const recipSet = new Set(a.recipient_ids || []);
+  const totalAll = (projects || []).length;
   const relevantProjects = (projects || []).filter((p) => {
-    if (p.completed_at) return false;
     const m = projMembers[p.id] || { leader: [], tg: [] };
     const hasLeaderIn = m.leader.some((uid) => recipSet.has(uid));
     const hasTgIn = m.tg.some((uid) => recipSet.has(uid));
     return hasLeaderIn || hasTgIn;
   });
+  const notRelevant = totalAll - relevantProjects.length;
 
   // Danh sách tất cả Leader (để đề xuất đổi người dạy)
   const allLeaders = (allUsers || []).filter((u) => u.role === "leader").map((u) => u.id);
@@ -2004,12 +2006,16 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
   const nOk = assignments.filter((x) => x.status === "ok").length;
   const nTotal = assignments.length;
   if (nTotal === 0) {
-    outBox.innerHTML = `<div class="empty" style="margin-top:10px"><div class="em">🤷</div><p>Không có dự án nào liên quan đến thông báo này.</p><p class="meta">Dự án được xếp lịch khi có ít nhất 1 Leader dạy hoặc TG của dự án nằm trong danh sách người nhận thông báo.</p></div>`;
+    outBox.innerHTML = `<div class="empty" style="margin-top:10px"><div class="em">🤷</div><p>Không có dự án nào liên quan đến thông báo này.</p><p class="meta">Dự án được đưa vào xếp lịch khi có ít nhất 1 Leader dạy hoặc TG của dự án đó nằm trong danh sách người nhận thông báo. Sửa thông báo và thêm họ vào, hoặc tạo thông báo mới.</p></div>`;
     return;
   }
   outBox.innerHTML = `
     <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk}/${nTotal} dự án xếp được slot. ${nTotal - nOk > 0 ? `<span style="color:var(--amber)">${nTotal - nOk} dự án cần xử lý thủ công.</span>` : ""}</p>
-    <p class="meta" style="margin:0 0 6px">Chỉ các dự án có Leader dạy hoặc TG nằm trong danh sách nhận thông báo mới được xếp.</p>
+    <p class="meta" style="margin:0 0 6px">
+      Phạm vi lọc: <b>${totalAll}</b> dự án hệ thống${notRelevant > 0 ? ` − <b>${notRelevant}</b> không có Leader dạy/TG trong người nhận TB` : ""} =
+      <b style="color:var(--blue-d)">${nTotal}</b> dự án đưa vào xếp.
+      <br>Admin muốn xếp cho dự án nào thì chọn Leader dạy + TG của dự án đó khi tạo thông báo.
+    </p>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>Dự án</th><th>Leader (người dạy)</th><th>Trạng thái</th><th>Slot gợi ý</th><th>Ghi chú</th></tr></thead>
       <tbody>${rowsHTML || '<tr><td colspan="6" class="empty">Không có dự án nào.</td></tr>'}</tbody>
