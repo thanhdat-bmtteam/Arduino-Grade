@@ -1811,22 +1811,20 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
   const days = (a.config.days || []).slice().sort();
   const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
 
-  // Lấy project members (TG) + biz_tasks (Leader) để biết dự án có ai dạy ai học
-  const [{ data: members }, { data: tasks }, { data: projects }] = await Promise.all([
+  // Lấy project members (TG) + biz_projects.teaching_leader_id (Leader dạy do admin phân công)
+  const [{ data: members }, { data: projects }] = await Promise.all([
     sb.from("biz_project_members").select("project_id,profile_id"),
-    sb.from("biz_tasks").select("project_id,assignee_id"),
-    sb.from("biz_projects").select("id,name,completed_at"),
+    sb.from("biz_projects").select("id,name,completed_at,teaching_leader_id"),
   ]);
   const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
   const projMap = {}; (projects || []).forEach((p) => projMap[p.id] = p);
-  // {projectId: {leader: [uids] (unique), tg: [uids] (unique)}}
+  // {projectId: {leader: [uids], tg: [uids]}}  — leader lấy từ teaching_leader_id (chỉ 1 người)
   const projMembers = {};
-  // Leader lấy từ biz_tasks.assignee_id (role=leader)
-  (tasks || []).forEach((t) => {
-    const u = userById[t.assignee_id];
-    if (!u || u.role !== "leader") return;
-    if (!projMembers[t.project_id]) projMembers[t.project_id] = { leader: [], tg: [] };
-    if (!projMembers[t.project_id].leader.includes(t.assignee_id)) projMembers[t.project_id].leader.push(t.assignee_id);
+  (projects || []).forEach((p) => {
+    projMembers[p.id] = { leader: [], tg: [] };
+    if (p.teaching_leader_id && userById[p.teaching_leader_id] && userById[p.teaching_leader_id].role === "leader") {
+      projMembers[p.id].leader.push(p.teaching_leader_id);
+    }
   });
   // TG lấy từ biz_project_members (role=tg)
   (members || []).forEach((m) => {
@@ -2725,14 +2723,16 @@ async function showProjectQR(p) {
 
 async function bizProjects() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates] = await Promise.all([
+  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates, { data: leaderProfiles }] = await Promise.all([
     sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
     sb.from("biz_invoices").select("project_name,total"),
     sb.from("biz_expenses").select("project_id,amount,paid"),
     sb.from("biz_incomes").select("project_id,amount"),
     sb.from("biz_attendance").select("transport,paid,status").eq("status", "approved").eq("paid", true),
     getAttRates(),
+    sb.from("profiles").select("id,full_name").eq("role", "leader"),
   ]);
+  const leaderNameById = {}; (leaderProfiles || []).forEach((l) => leaderNameById[l.id] = l.full_name);
   // Tổng phụ cấp đã CK cho toàn bộ leader (không gắn với dự án nào)
   const allowancePaid = (attRows || []).reduce((s, x) =>
     s + (x.transport === "ca_nhan" ? (rates.ca_nhan || 0) : (rates.xe_om || 0)), 0);
@@ -2776,9 +2776,10 @@ async function bizProjects() {
                 : `Còn ${fmtVND(chiNo)} chưa CK cho nhân viên.`)
       : "";
     const isDone = !!p.completed_at;
+    const teacherName = p.teaching_leader_id ? leaderNameById[p.teaching_leader_id] : null;
     return `<div class="card" ${isDone ? 'style="opacity:.72"' : ""}>
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
-          <div style="font-weight:700">${esc(p.name)}</div>
+          <div style="font-weight:700">${esc(p.name)}${teacherName ? ` <span class="badge blue" style="font-weight:500">👨‍🏫 ${esc(teacherName)}</span>` : (isDone ? '' : ' <span class="badge gray" style="font-weight:500">chưa phân Leader dạy</span>')}</div>
           ${isDone ? `<span class="badge green">✅ Đã hoàn thành · ${fmtDate(p.completed_at)}</span>` : ""}
         </div>
         <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b>${chiNo > 0 ? ` · Còn nợ NV: <b style="color:var(--amber)">${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
@@ -3026,11 +3027,21 @@ async function openProjectStatsModal() {
   render("all");
 }
 
-function openProjectModal(ex) {
+async function openProjectModal(ex) {
   ex = ex || {};
+  // Load danh sách leader để chọn người dạy
+  const { data: leaders } = await sb.from("profiles").select("id,full_name,email").eq("role", "leader").order("full_name");
+  const leaderOptions = (leaders || []).map((l) => `<option value="${l.id}" ${ex.teaching_leader_id === l.id ? "selected" : ""}>${esc(l.full_name || l.email || "?")}</option>`).join("");
   showModal(ex.id ? "Sửa dự án" : "Tạo dự án", `
     <div class="field"><label>Tên dự án *</label><input id="pj-name" value="${esc(ex.name || "")}"/></div>
     <div class="field"><label>Báo giá (đ)</label><input id="pj-quote" type="number" value="${ex.quote ?? 0}"/></div>
+    <div class="field"><label>Leader dạy (dùng cho xếp lịch học)</label>
+      <select id="pj-teacher">
+        <option value="">— Chưa phân công —</option>
+        ${leaderOptions}
+      </select>
+      <div class="help">Chọn Leader sẽ đứng lớp dạy TG. Chỉ Leader được chọn ở đây mới tham gia xếp lịch tự động, không phải tất cả Leader có task.</div>
+    </div>
     <div class="field"><label>Ghi chú</label><input id="pj-note" value="${esc(ex.note || "")}"/></div>
     <div class="help">Mẹo: đặt tên dự án trùng với ô "Dự án" trên hoá đơn để tự cộng vào phần Thu.</div>`,
     `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="pj-save">Lưu</button>`);
@@ -3038,7 +3049,12 @@ function openProjectModal(ex) {
     const name = document.getElementById("pj-name").value.trim();
     if (!name) return toast("Nhập tên dự án", "err");
     e.target.disabled = true;
-    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim() };
+    const payload = {
+      name,
+      quote: Number(document.getElementById("pj-quote").value) || 0,
+      note: document.getElementById("pj-note").value.trim(),
+      teaching_leader_id: document.getElementById("pj-teacher").value || null,
+    };
     const res = ex.id ? await sb.from("biz_projects").update(payload).eq("id", ex.id) : await sb.from("biz_projects").insert(payload);
     if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
     toast("Đã lưu", "ok"); closeModal(); bizProjects();
