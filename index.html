@@ -1965,22 +1965,14 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
       });
       return;
     }
-    // OK: chọn tối đa `perProject` slot
-    const take = Math.min(perProject, free.length);
-    const chosenSlots = free.slice(0, take);
-    if (!leaderUsedSlots[leader]) leaderUsedSlots[leader] = new Set();
-    chosenSlots.forEach((s) => leaderUsedSlots[leader].add(s));
-    assignments.push({
-      p, leader,
-      status: take >= perProject ? "ok" : "ok_partial",
-      slots: chosenSlots,
-      slot: chosenSlots[0], // giữ lại cho tương thích
-      partialNote: take < perProject ? `Chỉ xếp được ${take}/${perProject} buổi (không còn slot khớp sau khi loại trùng với dự án khác).` : null,
-    });
+    // OK: chọn 1 slot cố định (1 ca × 1 ngày trong tuần). Dự án học slot này LẶP qua các tuần → đủ perProject buổi.
+    const chosen = free[0];
+    (leaderUsedSlots[leader] = leaderUsedSlots[leader] || new Set()).add(chosen);
+    assignments.push({ p, leader, status: "ok", slot: chosen, slots: [chosen] });
   });
 
   // Sort kết quả: OK trước, warning sau
-  const prio = { ok: 0, ok_partial: 1, video_tg: 2, leader_mismatch: 3, leader_slot_conflict: 4, leader_no_signup: 5, no_leader: 6, no_tg: 7, no_recip: 8 };
+  const prio = { ok: 0, video_tg: 1, leader_mismatch: 2, leader_slot_conflict: 3, leader_no_signup: 4, no_leader: 5, no_tg: 6, no_recip: 7 };
   assignments.sort((a, b) => (prio[a.status] || 9) - (prio[b.status] || 9));
 
   // Render UI
@@ -1991,7 +1983,6 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
   };
   const statusBadge = (st) => ({
     ok: '<span class="badge green">✓ Xếp OK</span>',
-    ok_partial: '<span class="badge amber">⚠ Chỉ xếp được 1 phần</span>',
     video_tg: '<span class="badge amber">📹 Học video</span>',
     leader_mismatch: '<span class="badge amber">⚠ Leader không khớp</span>',
     leader_slot_conflict: '<span class="badge amber">⚠ Leader hết slot</span>',
@@ -2003,29 +1994,27 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
 
   const rowsHTML = assignments.map((x, i) => {
     const leaderName = x.leader ? ((userById[x.leader] || {}).full_name || "?") : "—";
-    const slotsHTML = (x.slots && x.slots.length)
-      ? x.slots.map((s) => `<div style="margin:2px 0"><b style="color:var(--green)">• ${slotLabel(s)}</b></div>`).join("")
+    const slotsHTML = x.slot
+      ? `<div><b style="color:var(--green)">${slotLabel(x.slot)}</b></div><div class="meta" style="margin-top:3px">× <b>${perProject}</b> buổi (${perProject} tuần liên tiếp)</div>`
       : (x.tgCommon && x.tgCommon.size ? `<span class="meta">TG rảnh chung: ${[...x.tgCommon].map(slotLabel).join("; ")}</span>` : '<span class="meta">—</span>');
-    const noteFull = [x.note || "", x.partialNote || ""].filter(Boolean).join(" ");
     return `<tr>
       <td>${i + 1}</td>
       <td><b>${esc(x.p.name)}</b></td>
       <td>${esc(leaderName)}</td>
       <td>${statusBadge(x.status)}</td>
       <td>${slotsHTML}</td>
-      <td class="meta">${noteFull}</td>
+      <td class="meta">${x.note || ""}</td>
     </tr>`;
   }).join("");
 
   const nOk = assignments.filter((x) => x.status === "ok").length;
-  const nPartial = assignments.filter((x) => x.status === "ok_partial").length;
   const nTotal = assignments.length;
   if (nTotal === 0) {
     outBox.innerHTML = `<div class="empty" style="margin-top:10px"><div class="em">🤷</div><p>Không có dự án nào liên quan đến thông báo này.</p><p class="meta">Dự án được đưa vào xếp lịch khi có ít nhất 1 Leader dạy hoặc TG của dự án đó nằm trong danh sách người nhận thông báo. Sửa thông báo và thêm họ vào, hoặc tạo thông báo mới.</p></div>`;
     return;
   }
   outBox.innerHTML = `
-    <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk}/${nTotal} dự án xếp đủ ${perProject} buổi${nPartial > 0 ? `, <span style="color:var(--amber)">${nPartial} dự án chỉ xếp được 1 phần</span>` : ""}. ${nTotal - nOk - nPartial > 0 ? `<span style="color:var(--amber)">${nTotal - nOk - nPartial} dự án cần xử lý thủ công.</span>` : ""}</p>
+    <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk}/${nTotal} dự án xếp được slot (mỗi dự án học <b>${perProject} buổi</b>, lặp theo tuần). ${nTotal - nOk > 0 ? `<span style="color:var(--amber)">${nTotal - nOk} dự án cần xử lý thủ công.</span>` : ""}</p>
     <p class="meta" style="margin:0 0 6px">
       Phạm vi lọc: <b>${totalAll}</b> dự án hệ thống${notRelevant > 0 ? ` − <b>${notRelevant}</b> không có Leader dạy/TG trong người nhận TB` : ""} =
       <b style="color:var(--blue-d)">${nTotal}</b> dự án đưa vào xếp.
@@ -2042,40 +2031,44 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
   // Export CSV với ngày cụ thể
   document.getElementById("sch-csv").onclick = () => {
     // Tạo list ngày học thực cho mỗi assignment OK, lặp theo weekday từ startDate đến endDate
-    const rows = [["Dự án", "Leader (người dạy)", "Ngày học", "Thứ", "Ca", "Giờ bắt đầu", "Giờ kết thúc", "TG tham gia", "Ghi chú"]];
+    const rows = [["Dự án", "Leader (người dạy)", "Ngày học", "Thứ", "Ca", "Giờ bắt đầu", "Giờ kết thúc", "TG tham gia", "Buổi", "Ghi chú"]];
     const startD = new Date(startDate + "T00:00:00");
     const endD = new Date(endDate + "T23:59:59");
     assignments.forEach((x) => {
       const leaderName = x.leader ? (userById[x.leader] || {}).full_name || "" : "";
       const m = projMembers[x.p.id] || { tg: [] };
       const tgNames = m.tg.map((uid) => (userById[uid] || {}).full_name || "?").join(", ");
-      const noteClean = [(x.note || ""), (x.partialNote || "")].filter(Boolean).join(" ").replace(/<[^>]+>/g, "");
-      if (x.status !== "ok" && x.status !== "ok_partial") {
-        rows.push([x.p.name, leaderName, "", "", "", "", "", "", noteClean]);
+      const noteClean = (x.note || "").replace(/<[^>]+>/g, "");
+      if (x.status !== "ok") {
+        rows.push([x.p.name, leaderName, "", "", "", "", "", "", noteClean, ""]);
         return;
       }
-      // Mỗi slot của dự án → sinh ra 1 chuỗi lịch học theo tuần
-      (x.slots || [x.slot]).forEach((slotKey) => {
-        const [day, si] = slotKey.split("-").map(Number);
-        const sh = shifts[si] || {};
-        // JS getDay(): 0=CN, 1=T2 ... Mapping của mình: 2=T2, ..., 8=CN
-        const jsWeekday = day === 8 ? 0 : day - 1;
-        const d = new Date(startD);
-        while (d.getDay() !== jsWeekday && d <= endD) d.setDate(d.getDate() + 1);
-        while (d <= endD) {
-          rows.push([
-            x.p.name, leaderName,
-            d.toLocaleDateString("vi-VN"),
-            dayLbl(day),
-            sh.label || "",
-            sh.start || "",
-            sh.end || "",
-            tgNames,
-            x.status === "ok_partial" ? (x.partialNote || "").replace(/<[^>]+>/g, "") : "",
-          ]);
-          d.setDate(d.getDate() + 7);
-        }
-      });
+      // 1 slot cố định, lặp qua N tuần (N = perProject)
+      const [day, si] = x.slot.split("-").map(Number);
+      const sh = shifts[si] || {};
+      const jsWeekday = day === 8 ? 0 : day - 1;
+      const d = new Date(startD);
+      while (d.getDay() !== jsWeekday && d <= endD) d.setDate(d.getDate() + 1);
+      let bNum = 1;
+      while (d <= endD && bNum <= perProject) {
+        rows.push([
+          x.p.name, leaderName,
+          d.toLocaleDateString("vi-VN"),
+          dayLbl(day),
+          sh.label || "",
+          sh.start || "",
+          sh.end || "",
+          tgNames,
+          `Buổi ${bNum}/${perProject}`,
+          "",
+        ]);
+        d.setDate(d.getDate() + 7);
+        bNum++;
+      }
+      // Nếu endDate không đủ chứa đủ perProject buổi → ghi 1 dòng cảnh báo
+      if (bNum <= perProject) {
+        rows.push([x.p.name, leaderName, "", "", "", "", "", "", `⚠ Chỉ xếp được ${bNum - 1}/${perProject} buổi — endDate không đủ`, ""]);
+      }
     });
     const fname = `lich-day-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`;
     downloadCSV(fname, rows);
