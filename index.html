@@ -2688,41 +2688,88 @@ async function openProjectStatsModal() {
         const key = btn.dataset.stexp;
         let rows, fname;
         if (key === "quote") {
-          rows = [["Dự án", "Báo giá", "Ngày tạo", "Ghi chú", "Trạng thái"]];
-          projsIn.forEach((p) => rows.push([p.name, p.quote || 0, fmtDate(p.created_at), p.note || "", p.completed_at ? "Đã hoàn thành " + fmtDate(p.completed_at) : "Đang chạy"]));
+          // Mỗi dự án 1 dòng: tên dự án, báo giá
+          rows = [["STT", "Dự án", "Báo giá (đ)"]];
+          projsIn.forEach((p, i) => rows.push([i + 1, p.name, p.quote || 0]));
+          rows.push(["", "— TỔNG —", tQuote]);
           fname = `bao-gia-${safeName}.csv`;
         } else if (key === "thu") {
-          rows = [["Dự án", "Số tiền", "Người trả", "Ghi chú", "Ngày"]];
-          incsIn.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
-          incsIn.forEach((x) => rows.push([(projMap[x.project_id] || {}).name || "?", x.amount || 0, x.payer_name || "", x.note || "", fmtDate(x.created_at || x.income_date)]));
+          // Group theo dự án: dự án → tổng thu
+          const byProj = {};
+          incsIn.forEach((x) => { byProj[x.project_id] = (byProj[x.project_id] || 0) + Number(x.amount || 0); });
+          rows = [["STT", "Dự án", "Tổng đã thu (đ)"]];
+          const entries = projsIn
+            .map((p) => ({ name: p.name, total: byProj[p.id] || 0 }))
+            .sort((a, b) => b.total - a.total);
+          entries.forEach((e, i) => rows.push([i + 1, e.name, e.total]));
+          rows.push(["", "— TỔNG —", tThu]);
           fname = `thu-${safeName}.csv`;
         } else if (key === "lk") {
-          rows = [["Dự án", "Khách", "Tổng", "Ngày HĐ"]];
-          invsIn.sort((a, b) => (b.invoice_date || "").localeCompare(a.invoice_date || ""));
-          invsIn.forEach((iv) => rows.push([iv.project_name || "", iv.customer || "", iv.total || 0, fmtDate(iv.invoice_date)]));
+          // Group linh kiện: tên + đơn vị + đơn giá → SL tổng, thành tiền
+          const byItem = {};
+          invsIn.forEach((iv) => {
+            (iv.items || []).forEach((it) => {
+              const name = (it.name || "").trim(); if (!name) return;
+              const unit = (it.unit || "").trim();
+              const price = Number(it.price || 0);
+              const qty = Number(it.qty || 0);
+              const k = `${name}||${unit}||${price}`;
+              if (!byItem[k]) byItem[k] = { name, unit, price, qty: 0 };
+              byItem[k].qty += qty;
+            });
+          });
+          const items = Object.values(byItem).sort((a, b) => (b.price * b.qty) - (a.price * a.qty));
+          rows = [["STT", "Linh kiện", "Đơn vị", "Số lượng", "Đơn giá (đ)", "Thành tiền (đ)"]];
+          let totalLK = 0;
+          items.forEach((it, i) => {
+            const line = it.qty * it.price;
+            totalLK += line;
+            rows.push([i + 1, it.name, it.unit, it.qty, it.price, line]);
+          });
+          rows.push(["", "— TỔNG —", "", "", "", totalLK]);
           fname = `chi-linh-kien-${safeName}.csv`;
         } else if (key === "nv") {
-          rows = [["Dự án", "Nhân viên", "Nội dung", "Số tiền", "Ngày chi", "Ghi chú"]];
-          expsIn.sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
-          expsIn.forEach((x) => rows.push([(projMap[x.project_id] || {}).name || "?", x.employee_name || "", x.note || "", x.amount || 0, fmtDate(x.expense_date), x.extra_note || ""]));
+          // Group theo nhân viên: tên NV → tổng đã nhận
+          const byEmp = {};
+          expsIn.forEach((x) => {
+            const nm = (x.employee_name || "(không rõ)").trim();
+            byEmp[nm] = (byEmp[nm] || 0) + Number(x.amount || 0);
+          });
+          rows = [["STT", "Nhân viên", "Tổng đã nhận (đ)"]];
+          const entries = Object.entries(byEmp).sort((a, b) => b[1] - a[1]);
+          entries.forEach((e, i) => rows.push([i + 1, e[0], e[1]]));
+          rows.push(["", "— TỔNG —", tNV]);
           fname = `chi-nhan-vien-${safeName}.csv`;
         } else if (key === "pc") {
           if (!attIn.length) { toast("Không có dữ liệu phụ cấp (chỉ tính khi xem Tất cả dự án)", "err"); return; }
-          rows = [["Leader", "Ngày", "Giờ", "Phương tiện", "Số tiền"]];
-          attIn.sort((a, b) => (b.work_date || "").localeCompare(a.work_date || ""));
-          attIn.forEach((x) => rows.push([leaderName[x.leader_id] || "?", fmtDate(x.work_date), `${(x.start_time || "").slice(0,5)}-${(x.end_time || "").slice(0,5)}`, transportLabel(x.transport), amtOf(x)]));
+          // Group theo leader: tên → tổng phụ cấp
+          const byLd = {};
+          attIn.forEach((x) => {
+            const nm = leaderName[x.leader_id] || "(không rõ)";
+            byLd[nm] = (byLd[nm] || 0) + amtOf(x);
+          });
+          rows = [["STT", "Leader", "Tổng phụ cấp đã nhận (đ)"]];
+          const entries = Object.entries(byLd).sort((a, b) => b[1] - a[1]);
+          entries.forEach((e, i) => rows.push([i + 1, e[0], e[1]]));
+          rows.push(["", "— TỔNG —", tPC]);
           fname = `phu-cap-${safeName}.csv`;
         } else if (key === "ln") {
-          // Tổng hợp theo dự án
-          rows = [["Dự án", "Báo giá", "Thu", "Chi linh kiện", "Chi NV đã CK", "Chi NV chưa CK", "Lợi nhuận (chưa trừ PC)"]];
-          projsIn.forEach((p) => {
+          // Mỗi dự án 1 dòng với LN (chưa trừ phụ cấp), tổng cuối
+          rows = [["STT", "Dự án", "Thu (đ)", "Chi linh kiện (đ)", "Chi NV đã CK (đ)", "Lợi nhuận (đ)"]];
+          let sumThu = 0, sumLK = 0, sumNV = 0, sumLN = 0;
+          projsIn.forEach((p, i) => {
             const thu = (incomes || []).filter((x) => x.project_id === p.id).reduce((s, x) => s + Number(x.amount || 0), 0);
             const lk = (invoices || []).filter((iv) => (iv.project_name || "").trim() === (p.name || "").trim()).reduce((s, x) => s + Number(x.total || 0), 0);
             const nvPaid = (expenses || []).filter((x) => x.project_id === p.id && x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
-            const nvUnpaid = (expenses || []).filter((x) => x.project_id === p.id && !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
-            rows.push([p.name, p.quote || 0, thu, lk, nvPaid, nvUnpaid, thu - lk - nvPaid]);
+            const ln = thu - lk - nvPaid;
+            sumThu += thu; sumLK += lk; sumNV += nvPaid; sumLN += ln;
+            rows.push([i + 1, p.name, thu, lk, nvPaid, ln]);
           });
-          if (scope === null) rows.push(["— TỔNG —", tQuote, tThu, tLK, tNV, "", tThu - tLK - tNV], ["Phụ cấp đã CK (toàn hệ thống)", "", "", "", tPC, "", ""], ["LỢI NHUẬN SAU PHỤ CẤP", "", "", "", "", "", tLN]);
+          rows.push(["", "— TỔNG —", sumThu, sumLK, sumNV, sumLN]);
+          if (scope === null) {
+            rows.push(["", "Phụ cấp đã CK (toàn hệ thống, không chia dự án)", "", "", "", -tPC]);
+            rows.push(["", "LỢI NHUẬN SAU PHỤ CẤP", "", "", "", sumLN - tPC]);
+          }
           fname = `loi-nhuan-${safeName}.csv`;
         }
         downloadCSV(fname, rows);
