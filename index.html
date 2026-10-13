@@ -1530,7 +1530,7 @@ async function bizNotify() {
 }
 
 /* === Modal tạo/sửa Thông báo === */
-function openBizAnnouncementModal(ex, allUsers) {
+async function openBizAnnouncementModal(ex, allUsers) {
   ex = ex || {};
   const isEdit = !!ex.id;
   const type = ex.type || "text";
@@ -1539,6 +1539,20 @@ function openBizAnnouncementModal(ex, allUsers) {
   const groupedUsers = { admin: [], leader: [], gvhd: [], tg: [] };
   (allUsers || []).forEach((u) => { if (groupedUsers[u.role]) groupedUsers[u.role].push(u); });
   const roleLbl = { admin: "Admin", leader: "Leader", gvhd: "GVHD", tg: "Tác giả" };
+  // Load các dự án đang chạy + members để tạo nút tiện ích "Thêm Leader dạy + TG của dự án"
+  const [{ data: activeProjs }, { data: pjMembers }] = await Promise.all([
+    sb.from("biz_projects").select("id,name,teaching_leader_id").is("completed_at", null),
+    sb.from("biz_project_members").select("project_id,profile_id"),
+  ]);
+  // Gom các user cần auto-select: tất cả teaching_leader_id + tất cả TG của dự án đang chạy
+  const autoSelectIds = new Set();
+  (activeProjs || []).forEach((p) => { if (p.teaching_leader_id) autoSelectIds.add(p.teaching_leader_id); });
+  const activeProjIds = new Set((activeProjs || []).map((p) => p.id));
+  const userRole = {}; (allUsers || []).forEach((u) => userRole[u.id] = u.role);
+  (pjMembers || []).forEach((m) => {
+    if (!activeProjIds.has(m.project_id)) return;
+    if (userRole[m.profile_id] === "tg") autoSelectIds.add(m.profile_id);
+  });
   const userCheckboxes = Object.keys(groupedUsers).map((r) => {
     if (!groupedUsers[r].length) return "";
     return `<details ${recipSet.size === 0 ? "" : "open"} style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600">${roleLbl[r]} <button type="button" class="btn ghost sm" data-selall="${r}" style="margin-left:6px">Chọn tất cả</button><button type="button" class="btn ghost sm" data-selnone="${r}">Bỏ chọn</button></summary>
@@ -1555,6 +1569,7 @@ function openBizAnnouncementModal(ex, allUsers) {
     </select></div>
     <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
     <div class="field"><label>Người nhận * <span id="ann-recip-count" style="color:var(--blue-d);font-weight:600">(0 đã chọn)</span></label>
+      <div style="margin-bottom:6px"><button type="button" class="btn secondary sm" id="ann-add-project-users">✨ Thêm Leader dạy + TG của ${(activeProjs || []).length} dự án đang chạy (${autoSelectIds.size} người)</button></div>
       <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
     </div>
     <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="3" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
@@ -1589,6 +1604,17 @@ function openBizAnnouncementModal(ex, allUsers) {
     document.getElementById("ann-recip-count").textContent = `(${n} đã chọn)`;
   };
   updCount();
+  document.getElementById("ann-add-project-users").onclick = () => {
+    let added = 0;
+    autoSelectIds.forEach((uid) => {
+      const cb = document.querySelector(`.ann-recip[value="${uid}"]`);
+      if (cb && !cb.checked) { cb.checked = true; added++; }
+    });
+    // Mở các details có user được check
+    document.querySelectorAll(".ann-recip:checked").forEach((cb) => { const d = cb.closest("details"); if (d) d.open = true; });
+    updCount();
+    toast(`Đã chọn thêm ${added} người (Leader dạy + TG của các dự án đang chạy)`, "ok");
+  };
   modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ann-recip")) updCount(); });
   modalRoot().querySelectorAll("[data-selall]").forEach((b) => {
     b.onclick = () => { modalRoot().querySelectorAll(`.ann-recip[data-role="${b.dataset.selall}"]`).forEach((c) => c.checked = true); updCount(); };
@@ -1843,14 +1869,14 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
     userSlots[u.id] = set;
   });
 
-  // Lọc dự án tham gia xếp lịch: dự án chưa hoàn thành + có Leader + có TG + ít nhất 1 TG đã đăng ký
+  // Dự án LIÊN QUAN đến thông báo = chưa hoàn thành + có Leader hoặc TG nằm trong danh sách nhận
   const recipSet = new Set(a.recipient_ids || []);
-  const activeProjects = (projects || []).filter((p) => {
+  const relevantProjects = (projects || []).filter((p) => {
     if (p.completed_at) return false;
-    const m = projMembers[p.id];
-    if (!m || !m.leader.length || !m.tg.length) return false;
-    // Có ít nhất 1 TG của dự án nằm trong danh sách nhận thông báo
-    return m.tg.some((uid) => recipSet.has(uid));
+    const m = projMembers[p.id] || { leader: [], tg: [] };
+    const hasLeaderIn = m.leader.some((uid) => recipSet.has(uid));
+    const hasTgIn = m.tg.some((uid) => recipSet.has(uid));
+    return hasLeaderIn || hasTgIn;
   });
 
   // Danh sách tất cả Leader (để đề xuất đổi người dạy)
@@ -1867,24 +1893,38 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
   const leaderUsedSlots = {}; // {leaderId: Set<slot>}
   const assignments = []; // {project, leader, slot, status, note, altLeaders, candidates, tgCommon}
   // Sort dự án theo "khó" (ít candidates nhất xếp trước) để tránh bế tắc
-  const scored = activeProjects.map((p) => {
-    const m = projMembers[p.id];
-    const leader = m.leader[0]; // 1 dự án lấy leader đầu tiên (thường chỉ có 1)
+  const scored = relevantProjects.map((p) => {
+    const m = projMembers[p.id] || { leader: [], tg: [] };
+    const leader = m.leader[0] || null; // teaching_leader_id (có thể null)
     const tgSets = m.tg.filter((uid) => recipSet.has(uid)).map((uid) => userSlots[uid] || new Set());
     const tgCommon = intersect(tgSets);
-    const leaderSlots = userSlots[leader] || new Set();
-    const candidates = [...tgCommon].filter((s) => leaderSlots.has(s));
+    const leaderSlots = leader ? (userSlots[leader] || new Set()) : new Set();
+    const candidates = leader ? [...tgCommon].filter((s) => leaderSlots.has(s)) : [];
     return { p, m, leader, tgSets, tgCommon, candidates };
   });
   scored.sort((a, b) => a.candidates.length - b.candidates.length);
 
   scored.forEach(({ p, m, leader, tgSets, tgCommon, candidates }) => {
+    // Case 0a: Dự án chưa phân Leader dạy
+    if (!leader) {
+      assignments.push({ p, status: "no_leader", note: `Dự án chưa phân Leader dạy — vào tab Dự án, bấm "Sửa" để chọn Leader đứng lớp.` });
+      return;
+    }
+    // Case 0b: Dự án không có TG (hoặc TG không trong recipients)
+    if (!m.tg.length) {
+      assignments.push({ p, leader, status: "no_tg", note: "Dự án chưa có TG." });
+      return;
+    }
+    if (!tgSets.length) {
+      assignments.push({ p, leader, status: "no_recip", note: "TG của dự án không nằm trong danh sách nhận thông báo." });
+      return;
+    }
     const leaderName = (userById[leader] || {}).full_name || "?";
     const leaderSlots = userSlots[leader] || new Set();
 
     // Case 1: Leader chưa đăng ký lịch
     if (!leaderSlots.size) {
-      assignments.push({ p, leader, status: "leader_no_signup", note: `Leader ${leaderName} chưa đăng ký lịch rảnh.` });
+      assignments.push({ p, leader, status: "leader_no_signup", note: `Leader ${leaderName} chưa đăng ký lịch rảnh (có thể do leader không được admin chọn trong danh sách nhận TB).` });
       return;
     }
     // Case 2: TG không có buổi chung
@@ -1924,18 +1964,6 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
     assignments.push({ p, leader, status: "ok", slot: chosen });
   });
 
-  // Thêm dự án không có Leader hoặc không có TG
-  (projects || []).filter((p) => !p.completed_at && !activeProjects.includes(p)).forEach((p) => {
-    const m = projMembers[p.id];
-    if (!m || !m.leader.length) {
-      assignments.push({ p, status: "no_leader", note: "Dự án chưa có Leader (chưa giao task cho ai)." });
-    } else if (!m.tg.length) {
-      assignments.push({ p, status: "no_tg", note: "Dự án chưa có TG." });
-    } else {
-      assignments.push({ p, status: "no_recip", note: "Không có TG nào của dự án nằm trong danh sách nhận thông báo." });
-    }
-  });
-
   // Sort kết quả: OK trước, warning sau
   const prio = { ok: 0, video_tg: 1, leader_mismatch: 2, leader_slot_conflict: 3, leader_no_signup: 4, no_leader: 5, no_tg: 6, no_recip: 7 };
   assignments.sort((a, b) => (prio[a.status] || 9) - (prio[b.status] || 9));
@@ -1972,8 +2000,13 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
 
   const nOk = assignments.filter((x) => x.status === "ok").length;
   const nTotal = assignments.length;
+  if (nTotal === 0) {
+    outBox.innerHTML = `<div class="empty" style="margin-top:10px"><div class="em">🤷</div><p>Không có dự án nào liên quan đến thông báo này.</p><p class="meta">Dự án được xếp lịch khi có ít nhất 1 Leader dạy hoặc TG của dự án nằm trong danh sách người nhận thông báo.</p></div>`;
+    return;
+  }
   outBox.innerHTML = `
     <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk}/${nTotal} dự án xếp được slot. ${nTotal - nOk > 0 ? `<span style="color:var(--amber)">${nTotal - nOk} dự án cần xử lý thủ công.</span>` : ""}</p>
+    <p class="meta" style="margin:0 0 6px">Chỉ các dự án có Leader dạy hoặc TG nằm trong danh sách nhận thông báo mới được xếp.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>#</th><th>Dự án</th><th>Leader (người dạy)</th><th>Trạng thái</th><th>Slot gợi ý</th><th>Ghi chú</th></tr></thead>
       <tbody>${rowsHTML || '<tr><td colspan="6" class="empty">Không có dự án nào.</td></tr>'}</tbody>
