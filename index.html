@@ -1675,24 +1675,27 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
   if (!a) return;
   showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const [{ data: resps }, { data: tasks }, { data: projs }, { data: members }] = await Promise.all([
+  const [{ data: resps }, { data: projs }, { data: members }] = await Promise.all([
     sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id),
-    sb.from("biz_tasks").select("project_id,assignee_id"),
-    sb.from("biz_projects").select("id,name"),
+    sb.from("biz_projects").select("id,name,teaching_leader_id"),
     sb.from("biz_project_members").select("project_id,profile_id"),
   ]);
   const respByUser = {}; (resps || []).forEach((r) => respByUser[r.user_id] = r);
   const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
-  // Map user_id -> danh sách tên dự án (duy nhất, sort). Nguồn: biz_project_members (TG/GVHD) + biz_tasks (Leader)
+  // Map user_id -> danh sách tên dự án mà user tham gia (CHỈ việc dạy / học, không tính task làm việc)
+  // - TG: lấy từ biz_project_members (được add là TG của dự án)
+  // - Leader: chỉ dự án mà họ được phân công DẠY (teaching_leader_id). Có task mà không dạy thì không tính.
   const projNameById = {}; (projs || []).forEach((p) => projNameById[p.id] = p.name);
   const userProjSet = {};
   (members || []).forEach((m) => {
-    if (!m.profile_id || !m.project_id || !projNameById[m.project_id]) return;
+    const u = userById[m.profile_id];
+    if (!u || u.role !== "tg") return;
+    if (!projNameById[m.project_id]) return;
     (userProjSet[m.profile_id] = userProjSet[m.profile_id] || new Set()).add(projNameById[m.project_id]);
   });
-  (tasks || []).forEach((t) => {
-    if (!t.assignee_id || !t.project_id || !projNameById[t.project_id]) return;
-    (userProjSet[t.assignee_id] = userProjSet[t.assignee_id] || new Set()).add(projNameById[t.project_id]);
+  (projs || []).forEach((p) => {
+    if (!p.teaching_leader_id) return;
+    (userProjSet[p.teaching_leader_id] = userProjSet[p.teaching_leader_id] || new Set()).add(p.name);
   });
   const userProjStr = (uid) => userProjSet[uid] ? [...userProjSet[uid]].sort().join(", ") : "";
   // Sort recips: theo dự án → role → tên; không có dự án xuống cuối
