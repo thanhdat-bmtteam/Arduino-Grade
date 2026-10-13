@@ -1909,7 +1909,14 @@ async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
     const candidates = leader ? [...tgCommon].filter((s) => leaderSlots.has(s)) : [];
     return { p, m, leader, tgSets, tgCommon, candidates };
   });
-  scored.sort((a, b) => a.candidates.length - b.candidates.length);
+  scored.sort((a, b) => {
+    // Ưu tiên 1: dự án có TG chung (xếp OK đủ cả nhóm) trước dự án phải fallback TG đại diện
+    const aHasCommon = a.tgCommon.size > 0 ? 0 : 1;
+    const bHasCommon = b.tgCommon.size > 0 ? 0 : 1;
+    if (aHasCommon !== bHasCommon) return aHasCommon - bHasCommon;
+    // Ưu tiên 2: ít candidates nhất trước (tránh bế tắc)
+    return a.candidates.length - b.candidates.length;
+  });
 
   scored.forEach(({ p, m, leader, tgSets, tgCommon, candidates }) => {
     // Case 0a: Dự án chưa phân Leader dạy
