@@ -2566,6 +2566,7 @@ async function bizProjects() {
     <p class="meta" style="margin:0 0 6px">Đang xem <b>${filterLabel}</b> · Số liệu tổng chỉ tính các dự án đang hiển thị (riêng Phụ cấp đã CK là tổng toàn hệ thống).</p>
     <div class="pill-row">
       <button class="btn" id="pj-new">＋ Tạo dự án</button>
+      <button class="btn secondary" id="pj-stats">📊 Thống kê</button>
       <select id="pj-filter" style="max-width:180px">
         <option value="active" ${pjFilter === "active" ? "selected" : ""}>Đang chạy (${nActive})</option>
         <option value="done" ${pjFilter === "done" ? "selected" : ""}>Đã hoàn thành (${nDone})</option>
@@ -2574,6 +2575,7 @@ async function bizProjects() {
     </div>
     ${cards || emptyMsg}`;
   document.getElementById("pj-new").onclick = () => openProjectModal();
+  document.getElementById("pj-stats").onclick = () => openProjectStatsModal();
   document.getElementById("pj-filter").onchange = (e) => { state.params.pj_filter = e.target.value; bizProjects(); };
   on("[data-pjed]", "click", (e) => openProjectModal(pmap[e.currentTarget.dataset.pjed]), bcontent());
   on("[data-pjexp]", "click", (e) => exportProjectInvoicesModal(pmap[e.currentTarget.dataset.pjexp]), bcontent());
@@ -2610,6 +2612,126 @@ async function bizProjects() {
     toast("Đã xoá dự án và dữ liệu liên quan", "ok"); bizProjects();
   }, bcontent());
 }
+
+/* ---------- Modal Thống kê dự án ---------- */
+async function openProjectStatsModal() {
+  showModal("📊 Thống kê dự án", loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  const body = modalRoot().querySelector(".modal-body");
+  const [{ data: projects }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates, { data: leaders }] = await Promise.all([
+    sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
+    sb.from("biz_invoices").select("*"),
+    sb.from("biz_expenses").select("*"),
+    sb.from("biz_incomes").select("*"),
+    sb.from("biz_attendance").select("*").eq("status", "approved").eq("paid", true),
+    getAttRates(),
+    sb.from("profiles").select("id,full_name").in("role", ["leader", "admin"]),
+  ]);
+  const projMap = {}; (projects || []).forEach((p) => projMap[p.id] = p);
+  const projByName = {}; (projects || []).forEach((p) => projByName[(p.name || "").trim()] = p);
+  const leaderName = {}; (leaders || []).forEach((l) => leaderName[l.id] = l.full_name);
+  const amtOf = (x) => (x.transport === "ca_nhan" ? (rates.ca_nhan || 0) : (rates.xe_om || 0));
+
+  // Hàm render body theo filter dự án
+  const render = (pid) => {
+    const scope = pid === "all" ? null : pid; // null = tất cả
+    const pfilter = (p) => scope === null || p.id === scope;
+    const projsIn = (projects || []).filter(pfilter);
+    const invsIn = (invoices || []).filter((iv) => scope === null ? true : (projByName[(iv.project_name || "").trim()] && projByName[(iv.project_name || "").trim()].id === scope));
+    const expsIn = (expenses || []).filter((x) => scope === null ? true : x.project_id === scope).filter((x) => x.paid);
+    const incsIn = (incomes || []).filter((x) => scope === null ? true : x.project_id === scope);
+    // Phụ cấp: chỉ tính khi scope = tất cả (vì không gắn dự án)
+    const attIn = scope === null ? (attRows || []) : [];
+
+    const tQuote = projsIn.reduce((s, p) => s + Number(p.quote || 0), 0);
+    const tThu = incsIn.reduce((s, x) => s + Number(x.amount || 0), 0);
+    const tLK = invsIn.reduce((s, x) => s + Number(x.total || 0), 0);
+    const tNV = expsIn.reduce((s, x) => s + Number(x.amount || 0), 0);
+    const tPC = attIn.reduce((s, x) => s + amtOf(x), 0);
+    const tLN = tThu - tLK - tNV - tPC;
+
+    const scopeName = scope === null ? "Tất cả dự án" : (projMap[scope] ? projMap[scope].name : "?");
+    const safeName = scopeName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+
+    const tile = (key, label, val, color, note) => `
+      <div class="card" style="margin:0;flex:1;min-width:200px">
+        <div class="meta">${label}${note ? ` <span title="${esc(note)}" style="cursor:help">ⓘ</span>` : ""}</div>
+        <div style="font-size:1.3rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div>
+        <button class="btn ghost sm" data-stexp="${key}" style="margin-top:6px;width:100%">⬇ Xuất CSV</button>
+      </div>`;
+
+    const pcNote = scope === null ? "" : "Không tính khi lọc 1 dự án vì phụ cấp không gắn dự án.";
+
+    body.innerHTML = `
+      <div class="row" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+        <label><b>Dự án:</b></label>
+        <select id="st-filter" style="flex:1;min-width:220px;max-width:360px">
+          <option value="all">Tất cả dự án (${(projects || []).length})</option>
+          ${(projects || []).map((p) => `<option value="${p.id}" ${p.id === scope ? "selected" : ""}>${esc(p.name)}${p.completed_at ? " ✅" : ""}</option>`).join("")}
+        </select>
+      </div>
+      <p class="meta" style="margin:0 0 10px">Đang xem: <b>${esc(scopeName)}</b> · Click <b>⬇ Xuất CSV</b> ở mỗi ô để tải chi tiết.</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
+        ${tile("quote", "💼 Tổng báo giá", tQuote)}
+        ${tile("thu", "💰 Tổng thu đến hiện tại", tThu, "var(--green)")}
+        ${tile("lk", "🔧 Tổng chi linh kiện (HĐ)", tLK, "var(--red)", "Tổng tiền các hoá đơn gốc của dự án.")}
+        ${tile("nv", "👷 Tổng chi nhân viên (đã CK)", tNV, "var(--red)", "Các khoản chi cho NV đã chuyển khoản.")}
+        ${tile("pc", "🕒 Tổng chi phụ cấp (đã CK)", tPC, "var(--red)", pcNote)}
+        ${tile("ln", "📈 Tổng lợi nhuận", tLN, tLN < 0 ? "var(--red)" : "var(--green)", "= Thu − LK − NV − Phụ cấp")}
+      </div>
+      ${scope !== null ? `<p class="meta">⚠ Khi lọc 1 dự án, phần Phụ cấp = 0 vì ca chấm công không được gắn với dự án cụ thể.</p>` : ""}`;
+
+    document.getElementById("st-filter").onchange = (e) => render(e.target.value === "all" ? "all" : e.target.value);
+
+    // Handlers export
+    body.querySelectorAll("[data-stexp]").forEach((btn) => {
+      btn.onclick = () => {
+        const key = btn.dataset.stexp;
+        let rows, fname;
+        if (key === "quote") {
+          rows = [["Dự án", "Báo giá", "Ngày tạo", "Ghi chú", "Trạng thái"]];
+          projsIn.forEach((p) => rows.push([p.name, p.quote || 0, fmtDate(p.created_at), p.note || "", p.completed_at ? "Đã hoàn thành " + fmtDate(p.completed_at) : "Đang chạy"]));
+          fname = `bao-gia-${safeName}.csv`;
+        } else if (key === "thu") {
+          rows = [["Dự án", "Số tiền", "Người trả", "Ghi chú", "Ngày"]];
+          incsIn.sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""));
+          incsIn.forEach((x) => rows.push([(projMap[x.project_id] || {}).name || "?", x.amount || 0, x.payer_name || "", x.note || "", fmtDate(x.created_at || x.income_date)]));
+          fname = `thu-${safeName}.csv`;
+        } else if (key === "lk") {
+          rows = [["Dự án", "Khách", "Tổng", "Ngày HĐ"]];
+          invsIn.sort((a, b) => (b.invoice_date || "").localeCompare(a.invoice_date || ""));
+          invsIn.forEach((iv) => rows.push([iv.project_name || "", iv.customer || "", iv.total || 0, fmtDate(iv.invoice_date)]));
+          fname = `chi-linh-kien-${safeName}.csv`;
+        } else if (key === "nv") {
+          rows = [["Dự án", "Nhân viên", "Nội dung", "Số tiền", "Ngày chi", "Ghi chú"]];
+          expsIn.sort((a, b) => (b.expense_date || "").localeCompare(a.expense_date || ""));
+          expsIn.forEach((x) => rows.push([(projMap[x.project_id] || {}).name || "?", x.employee_name || "", x.note || "", x.amount || 0, fmtDate(x.expense_date), x.extra_note || ""]));
+          fname = `chi-nhan-vien-${safeName}.csv`;
+        } else if (key === "pc") {
+          if (!attIn.length) { toast("Không có dữ liệu phụ cấp (chỉ tính khi xem Tất cả dự án)", "err"); return; }
+          rows = [["Leader", "Ngày", "Giờ", "Phương tiện", "Số tiền"]];
+          attIn.sort((a, b) => (b.work_date || "").localeCompare(a.work_date || ""));
+          attIn.forEach((x) => rows.push([leaderName[x.leader_id] || "?", fmtDate(x.work_date), `${(x.start_time || "").slice(0,5)}-${(x.end_time || "").slice(0,5)}`, transportLabel(x.transport), amtOf(x)]));
+          fname = `phu-cap-${safeName}.csv`;
+        } else if (key === "ln") {
+          // Tổng hợp theo dự án
+          rows = [["Dự án", "Báo giá", "Thu", "Chi linh kiện", "Chi NV đã CK", "Chi NV chưa CK", "Lợi nhuận (chưa trừ PC)"]];
+          projsIn.forEach((p) => {
+            const thu = (incomes || []).filter((x) => x.project_id === p.id).reduce((s, x) => s + Number(x.amount || 0), 0);
+            const lk = (invoices || []).filter((iv) => (iv.project_name || "").trim() === (p.name || "").trim()).reduce((s, x) => s + Number(x.total || 0), 0);
+            const nvPaid = (expenses || []).filter((x) => x.project_id === p.id && x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+            const nvUnpaid = (expenses || []).filter((x) => x.project_id === p.id && !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+            rows.push([p.name, p.quote || 0, thu, lk, nvPaid, nvUnpaid, thu - lk - nvPaid]);
+          });
+          if (scope === null) rows.push(["— TỔNG —", tQuote, tThu, tLK, tNV, "", tThu - tLK - tNV], ["Phụ cấp đã CK (toàn hệ thống)", "", "", "", tPC, "", ""], ["LỢI NHUẬN SAU PHỤ CẤP", "", "", "", "", "", tLN]);
+          fname = `loi-nhuan-${safeName}.csv`;
+        }
+        downloadCSV(fname, rows);
+      };
+    });
+  };
+  render("all");
+}
+
 function openProjectModal(ex) {
   ex = ex || {};
   showModal(ex.id ? "Sửa dự án" : "Tạo dự án", `
