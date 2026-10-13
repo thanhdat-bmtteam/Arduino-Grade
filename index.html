@@ -1715,11 +1715,13 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
       ${a.content ? `<p style="white-space:pre-wrap;margin:0 0 10px">${esc(a.content)}</p>` : ""}
       ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
       ${a.deadline ? `<p class="meta">⏰ Hạn chót: <b>${fmtDT(a.deadline)}</b></p>` : ""}
-      <div class="row" style="gap:8px;margin:10px 0 6px">
+      <div class="row" style="gap:8px;margin:10px 0 6px;flex-wrap:wrap">
+        <button class="btn success sm" id="ann-schedule">🤖 Xếp lịch tự động</button>
         <button class="btn secondary sm" id="ann-csv">⬇ Xuất CSV kết quả</button>
         <button class="btn ghost sm" id="ann-edit">Sửa</button>
         <button class="btn danger sm" id="ann-del">Xoá</button>
       </div>
+      <div id="ann-schedule-result"></div>
       <p class="meta" style="margin:0 0 4px">💡 Các TG cùng dự án đã được nhóm sát nhau (sort theo tên dự án) để dễ xếp lịch chung.</p>
       <div class="table-wrap"><table style="min-width:100%">
         <thead>
@@ -1768,12 +1770,257 @@ async function viewBizAnnouncementAdmin(a, allUsers) {
     });
     downloadCSV(`dang-ky-lich-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`, rows);
   };
+  // === Xếp lịch tự động ===
+  const btnSched = document.getElementById("ann-schedule");
+  if (btnSched) {
+    btnSched.onclick = async () => {
+      const resBox = document.getElementById("ann-schedule-result");
+      resBox.innerHTML = `<div class="card" style="background:#f6f8fc;margin:10px 0">
+        <b>🤖 Xếp lịch tự động</b>
+        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
+          <div class="field" style="max-width:170px;margin:0"><label>Ngày bắt đầu dạy</label><input id="sch-start" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
+          <div class="field" style="max-width:170px;margin:0"><label>Ngày kết thúc</label><input id="sch-end" type="date" value="${new Date(Date.now() + 60*86400000).toISOString().slice(0,10)}"/></div>
+          <button class="btn" id="sch-run">▶ Chạy xếp lịch</button>
+        </div>
+        <div id="sch-out"></div>
+      </div>`;
+      document.getElementById("sch-run").onclick = () => runAutoSchedule(a, allUsers, respByUser, userProjSet, projMap => projMap);
+    };
+  }
   document.getElementById("ann-edit").onclick = () => { closeModal(); openBizAnnouncementModal(a, allUsers); };
   document.getElementById("ann-del").onclick = async () => {
     if (!confirm(`Xoá thông báo "${a.title}"? Sẽ xoá luôn các phản hồi của user.`)) return;
     const { error } = await sb.from("biz_announcements").delete().eq("id", a.id);
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã xoá", "ok"); closeModal(); bizNotify();
+  };
+}
+
+/* === Thuật toán xếp lịch tự động === */
+async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
+  const outBox = document.getElementById("sch-out");
+  outBox.innerHTML = loadingHTML();
+  const startDate = document.getElementById("sch-start").value;
+  const endDate = document.getElementById("sch-end").value;
+  if (!startDate || !endDate || endDate < startDate) {
+    outBox.innerHTML = `<p class="meta" style="color:var(--red);margin-top:8px">⚠ Chọn ngày bắt đầu và ngày kết thúc hợp lệ.</p>`;
+    return;
+  }
+
+  const shifts = a.config.shifts || [];
+  const days = (a.config.days || []).slice().sort();
+  const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
+
+  // Lấy project members (TG) + biz_tasks (Leader) để biết dự án có ai dạy ai học
+  const [{ data: members }, { data: tasks }, { data: projects }] = await Promise.all([
+    sb.from("biz_project_members").select("project_id,profile_id"),
+    sb.from("biz_tasks").select("project_id,assignee_id"),
+    sb.from("biz_projects").select("id,name,completed_at"),
+  ]);
+  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
+  const projMap = {}; (projects || []).forEach((p) => projMap[p.id] = p);
+  // {projectId: {leader: [uids] (unique), tg: [uids] (unique)}}
+  const projMembers = {};
+  // Leader lấy từ biz_tasks.assignee_id (role=leader)
+  (tasks || []).forEach((t) => {
+    const u = userById[t.assignee_id];
+    if (!u || u.role !== "leader") return;
+    if (!projMembers[t.project_id]) projMembers[t.project_id] = { leader: [], tg: [] };
+    if (!projMembers[t.project_id].leader.includes(t.assignee_id)) projMembers[t.project_id].leader.push(t.assignee_id);
+  });
+  // TG lấy từ biz_project_members (role=tg)
+  (members || []).forEach((m) => {
+    const u = userById[m.profile_id];
+    if (!u || u.role !== "tg") return;
+    if (!projMembers[m.project_id]) projMembers[m.project_id] = { leader: [], tg: [] };
+    if (!projMembers[m.project_id].tg.includes(m.profile_id)) projMembers[m.project_id].tg.push(m.profile_id);
+  });
+
+  // Lịch rảnh của mỗi user: Set<"day-shift">
+  const userSlots = {};
+  (allUsers || []).forEach((u) => {
+    const r = respByUser[u.id];
+    const set = new Set();
+    if (r && Array.isArray(r.response)) r.response.forEach((x) => set.add(`${x.day}-${x.shift}`));
+    userSlots[u.id] = set;
+  });
+
+  // Lọc dự án tham gia xếp lịch: dự án chưa hoàn thành + có Leader + có TG + ít nhất 1 TG đã đăng ký
+  const recipSet = new Set(a.recipient_ids || []);
+  const activeProjects = (projects || []).filter((p) => {
+    if (p.completed_at) return false;
+    const m = projMembers[p.id];
+    if (!m || !m.leader.length || !m.tg.length) return false;
+    // Có ít nhất 1 TG của dự án nằm trong danh sách nhận thông báo
+    return m.tg.some((uid) => recipSet.has(uid));
+  });
+
+  // Danh sách tất cả Leader (để đề xuất đổi người dạy)
+  const allLeaders = (allUsers || []).filter((u) => u.role === "leader").map((u) => u.id);
+
+  // Giao điểm nhiều set
+  const intersect = (sets) => {
+    if (!sets.length) return new Set();
+    const [first, ...rest] = sets;
+    return new Set([...first].filter((s) => rest.every((x) => x.has(s))));
+  };
+
+  // Thuật toán greedy
+  const leaderUsedSlots = {}; // {leaderId: Set<slot>}
+  const assignments = []; // {project, leader, slot, status, note, altLeaders, candidates, tgCommon}
+  // Sort dự án theo "khó" (ít candidates nhất xếp trước) để tránh bế tắc
+  const scored = activeProjects.map((p) => {
+    const m = projMembers[p.id];
+    const leader = m.leader[0]; // 1 dự án lấy leader đầu tiên (thường chỉ có 1)
+    const tgSets = m.tg.filter((uid) => recipSet.has(uid)).map((uid) => userSlots[uid] || new Set());
+    const tgCommon = intersect(tgSets);
+    const leaderSlots = userSlots[leader] || new Set();
+    const candidates = [...tgCommon].filter((s) => leaderSlots.has(s));
+    return { p, m, leader, tgSets, tgCommon, candidates };
+  });
+  scored.sort((a, b) => a.candidates.length - b.candidates.length);
+
+  scored.forEach(({ p, m, leader, tgSets, tgCommon, candidates }) => {
+    const leaderName = (userById[leader] || {}).full_name || "?";
+    const leaderSlots = userSlots[leader] || new Set();
+
+    // Case 1: Leader chưa đăng ký lịch
+    if (!leaderSlots.size) {
+      assignments.push({ p, leader, status: "leader_no_signup", note: `Leader ${leaderName} chưa đăng ký lịch rảnh.` });
+      return;
+    }
+    // Case 2: TG không có buổi chung
+    if (!tgCommon.size) {
+      assignments.push({ p, leader, status: "video_tg", note: `Các TG của dự án không có buổi nào chung — gợi ý <b>học qua video</b>.` });
+      return;
+    }
+    // Case 3: Leader không khớp TG
+    if (!candidates.length) {
+      // Tìm Leader khác khớp với tgCommon
+      const altLeaders = allLeaders.filter((g) => g !== leader && [...tgCommon].some((s) => (userSlots[g] || new Set()).has(s)));
+      const altNames = altLeaders.map((g) => (userById[g] || {}).full_name || "?");
+      assignments.push({
+        p, leader, status: "leader_mismatch",
+        tgCommon,
+        altLeaders: altNames,
+        note: `Leader ${leaderName} không có buổi khớp với TG. Gợi ý <b>học qua video</b>${altNames.length ? ` hoặc đổi sang Leader khác: <b>${altNames.join(", ")}</b>` : ""}.`,
+      });
+      return;
+    }
+    // Case 4: Có candidates, loại slot Leader đã dùng cho dự án khác
+    const used = leaderUsedSlots[leader] || new Set();
+    const free = candidates.filter((s) => !used.has(s));
+    if (!free.length) {
+      const altLeaders = allLeaders.filter((g) => g !== leader && [...tgCommon].some((s) => (userSlots[g] || new Set()).has(s) && !(leaderUsedSlots[g] || new Set()).has(s)));
+      const altNames = altLeaders.map((g) => (userById[g] || {}).full_name || "?");
+      assignments.push({
+        p, leader, status: "leader_slot_conflict", tgCommon,
+        altLeaders: altNames,
+        note: `Leader ${leaderName} đã dùng hết slot khớp cho dự án khác. Gợi ý <b>học qua video</b>${altNames.length ? ` hoặc chuyển sang Leader: <b>${altNames.join(", ")}</b>` : ""}.`,
+      });
+      return;
+    }
+    // OK: chọn slot đầu tiên
+    const chosen = free[0];
+    (leaderUsedSlots[leader] = leaderUsedSlots[leader] || new Set()).add(chosen);
+    assignments.push({ p, leader, status: "ok", slot: chosen });
+  });
+
+  // Thêm dự án không có Leader hoặc không có TG
+  (projects || []).filter((p) => !p.completed_at && !activeProjects.includes(p)).forEach((p) => {
+    const m = projMembers[p.id];
+    if (!m || !m.leader.length) {
+      assignments.push({ p, status: "no_leader", note: "Dự án chưa có Leader (chưa giao task cho ai)." });
+    } else if (!m.tg.length) {
+      assignments.push({ p, status: "no_tg", note: "Dự án chưa có TG." });
+    } else {
+      assignments.push({ p, status: "no_recip", note: "Không có TG nào của dự án nằm trong danh sách nhận thông báo." });
+    }
+  });
+
+  // Sort kết quả: OK trước, warning sau
+  const prio = { ok: 0, video_tg: 1, leader_mismatch: 2, leader_slot_conflict: 3, leader_no_signup: 4, no_leader: 5, no_tg: 6, no_recip: 7 };
+  assignments.sort((a, b) => (prio[a.status] || 9) - (prio[b.status] || 9));
+
+  // Render UI
+  const slotLabel = (sKey) => {
+    const [d, si] = sKey.split("-").map(Number);
+    const sh = shifts[si] || {};
+    return `${dayLbl(d)} · ${sh.label || "?"} (${sh.start || ""}–${sh.end || ""})`;
+  };
+  const statusBadge = (st) => ({
+    ok: '<span class="badge green">✓ Xếp OK</span>',
+    video_tg: '<span class="badge amber">📹 Học video</span>',
+    leader_mismatch: '<span class="badge amber">⚠ Leader không khớp</span>',
+    leader_slot_conflict: '<span class="badge amber">⚠ Leader hết slot</span>',
+    leader_no_signup: '<span class="badge red">Leader chưa đăng ký</span>',
+    no_leader: '<span class="badge red">Chưa có Leader</span>',
+    no_tg: '<span class="badge gray">Chưa có TG</span>',
+    no_recip: '<span class="badge gray">TG không nhận TB</span>',
+  }[st] || `<span class="badge gray">${st}</span>`);
+
+  const rowsHTML = assignments.map((x, i) => {
+    const leaderName = x.leader ? ((userById[x.leader] || {}).full_name || "?") : "—";
+    const slotTxt = x.slot ? slotLabel(x.slot) : (x.tgCommon && x.tgCommon.size ? `TG rảnh chung: ${[...x.tgCommon].map(slotLabel).join("; ")}` : "—");
+    return `<tr>
+      <td>${i + 1}</td>
+      <td><b>${esc(x.p.name)}</b></td>
+      <td>${esc(leaderName)}</td>
+      <td>${statusBadge(x.status)}</td>
+      <td>${x.slot ? `<b style="color:var(--green)">${slotTxt}</b>` : `<span class="meta">${slotTxt}</span>`}</td>
+      <td class="meta">${x.note || ""}</td>
+    </tr>`;
+  }).join("");
+
+  const nOk = assignments.filter((x) => x.status === "ok").length;
+  const nTotal = assignments.length;
+  outBox.innerHTML = `
+    <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk}/${nTotal} dự án xếp được slot. ${nTotal - nOk > 0 ? `<span style="color:var(--amber)">${nTotal - nOk} dự án cần xử lý thủ công.</span>` : ""}</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Dự án</th><th>Leader (người dạy)</th><th>Trạng thái</th><th>Slot gợi ý</th><th>Ghi chú</th></tr></thead>
+      <tbody>${rowsHTML || '<tr><td colspan="6" class="empty">Không có dự án nào.</td></tr>'}</tbody>
+    </table></div>
+    <div class="row" style="gap:8px;margin-top:8px">
+      <button class="btn secondary sm" id="sch-csv">⬇ Xuất lịch học CSV (bao gồm ngày cụ thể)</button>
+    </div>`;
+
+  // Export CSV với ngày cụ thể
+  document.getElementById("sch-csv").onclick = () => {
+    // Tạo list ngày học thực cho mỗi assignment OK, lặp theo weekday từ startDate đến endDate
+    const rows = [["Dự án", "Leader (người dạy)", "Ngày học", "Thứ", "Ca", "Giờ bắt đầu", "Giờ kết thúc", "TG tham gia", "Ghi chú"]];
+    const startD = new Date(startDate + "T00:00:00");
+    const endD = new Date(endDate + "T23:59:59");
+    assignments.forEach((x) => {
+      if (x.status !== "ok") {
+        rows.push([x.p.name, x.leader ? (userById[x.leader] || {}).full_name || "" : "", "", "", "", "", "", "", (x.note || "").replace(/<[^>]+>/g, "")]);
+        return;
+      }
+      const [day, si] = x.slot.split("-").map(Number);
+      const sh = shifts[si] || {};
+      const leaderName = (userById[x.leader] || {}).full_name || "";
+      const m = projMembers[x.p.id] || { tg: [] };
+      const tgNames = m.tg.map((uid) => (userById[uid] || {}).full_name || "?").join(", ");
+      // JS getDay(): 0=CN, 1=T2 ... Mapping của mình: 2=T2, ..., 8=CN
+      const jsWeekday = day === 8 ? 0 : day - 1;
+      // Tìm ngày đầu tiên match jsWeekday >= startD
+      const d = new Date(startD);
+      while (d.getDay() !== jsWeekday && d <= endD) d.setDate(d.getDate() + 1);
+      // Lặp theo tuần
+      while (d <= endD) {
+        rows.push([
+          x.p.name, leaderName,
+          d.toLocaleDateString("vi-VN"),
+          dayLbl(day),
+          sh.label || "",
+          sh.start || "",
+          sh.end || "",
+          tgNames, "",
+        ]);
+        d.setDate(d.getDate() + 7);
+      }
+    });
+    const fname = `lich-day-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`;
+    downloadCSV(fname, rows);
   };
 }
 
