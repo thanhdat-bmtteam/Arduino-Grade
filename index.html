@@ -131,13 +131,13 @@ td .btn{margin-right:6px}
 
 /* ---------- modal ---------- */
 .modal-bg{position:fixed;inset:0;background:rgba(15,27,45,.5);display:flex;align-items:center;justify-content:center;z-index:60;padding:18px}
-.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:560px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+.modal{background:#fff;border-radius:var(--radius);width:100%;max-width:560px;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.3)}
 .modal.lg{max-width:780px}
-.modal-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--line);flex-shrink:0}
+.modal-head{display:flex;justify-content:space-between;align-items:center;padding:18px 22px;border-bottom:1px solid var(--line)}
 .modal-head h3{margin:0;font-size:18px}
 .modal-head .x{border:none;background:transparent;font-size:24px;cursor:pointer;color:var(--muted);line-height:1}
-.modal-body{padding:22px;overflow-y:auto;flex:1;min-height:0}
-.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px;flex-shrink:0;background:#fff}
+.modal-body{padding:22px}
+.modal-foot{padding:16px 22px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:10px}
 
 /* ---------- toast ---------- */
 #toasts{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:10px}
@@ -462,17 +462,8 @@ function routeDefault() {
 // ================= QUẢN LÝ (native) — chỉ admin/leader/accountant =================
 function hideBiz() { /* không còn dùng — phần Quản lý đã viết native */ }
 const fmtVND = (n) => (Number(n) || 0).toLocaleString("vi-VN") + "đ";
-// Làm tròn đơn giá bán theo bậc thang (giá gốc không đổi):
-//   < 1.000đ  → tròn hàng trăm, tối thiểu 100đ (tránh 33đ về 0)
-//   1k–10k    → tròn hàng 500đ
-//   ≥ 10k    → tròn hàng nghìn
-const roundSale = (v) => {
-  const n = Number(v) || 0;
-  if (n <= 0) return 0;
-  if (n < 1000)  return Math.max(100, Math.round(n / 100) * 100);
-  if (n < 10000) return Math.round(n / 500) * 500;
-  return Math.round(n / 1000) * 1000;
-};
+// Làm tròn đơn giá bán về hàng NGHÌN gần nhất (đơn giá gốc không đổi)
+const roundSale = (v) => Math.round((Number(v) || 0) / 1000) * 1000;
 const salePrice = (base, factor) => (factor === 1 ? Number(base) || 0 : roundSale((Number(base) || 0) * factor));
 function parseCSV(text) {
   const rows = []; let i = 0, field = "", row = [], inQ = false;
@@ -505,13 +496,12 @@ function bizHome() {
   const tab = state.params.btab || "invoices";
   const tabs = [["invoices", "Hoá đơn"], ["prices", "Bảng giá"], ["stock", "Kho"], ["projects", "Dự án"], ["employees", "Nhân viên"]];
   if (r === "admin") tabs.push(["notify", "Thông báo"]);
-  if (r === "admin") tabs.push(["attendance", "Chấm công"]);
   setContent(`
     <div class="section-title"><h2>Quản lý</h2></div>
     <div class="tabbar">${tabs.map(([k, l]) => `<button data-btab="${k}" class="${tab === k ? "active" : ""}">${esc(l)}${k === "notify" ? ' <span id="notify-badge"></span>' : ""}</button>`).join("")}</div>
     <div id="bcontent">${loadingHTML()}</div>`);
   on("[data-btab]", "click", (e) => go("biz-home", { btab: e.currentTarget.dataset.btab }), content());
-  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees, notify: bizNotify, attendance: bizAttendance }[tab] || bizInvoices)();
+  ({ invoices: bizInvoices, prices: bizPrices, stock: bizStock, projects: bizProjects, employees: bizEmployees, notify: bizNotify }[tab] || bizInvoices)();
   if (r === "admin") (async () => {
     const { count } = await sb.from("biz_tasks").select("id", { count: "exact", head: true }).eq("status", "review");
     const el = document.getElementById("notify-badge");
@@ -519,968 +509,20 @@ function bizHome() {
   })();
 }
 
-/* ---------- Chấm công ---------- */
-const ATT_RATES_DEFAULT = { ca_nhan: 30000, xe_om: 40000 };
-const transportLabel = (t) => t === "ca_nhan" ? "Xe cá nhân" : t === "xe_om" ? "Xe ôm công nghệ" : t;
-function attDuration(start, end) { // giờ (thập phân); trả về NaN nếu không hợp lệ
-  if (!start || !end) return NaN;
-  const [sh, sm] = start.split(":").map(Number), [eh, em] = end.split(":").map(Number);
-  const s = sh * 60 + sm, e = eh * 60 + em; if (e <= s) return NaN;
-  return (e - s) / 60;
-}
-async function getAttRates() {
-  const { data } = await sb.from("biz_settings").select("value").eq("key", "att_rates").maybeSingle();
-  return (data && data.value) || ATT_RATES_DEFAULT;
-}
-function attStatusBadge(s) {
-  return s === "approved" ? '<span class="badge green">Đã duyệt</span>'
-    : s === "rejected" ? '<span class="badge red">Từ chối</span>'
-    : '<span class="badge amber">Chờ duyệt</span>';
-}
-
-// ==== Trang của Leader: khai báo + xem công của mình ====
-async function leaderAttendance() {
-  const r = state.profile.role;
-  if (r !== "leader" && r !== "admin") { routeDefault(); return; }
-  setContent(`<div class="section-title"><h2>Chấm công</h2></div><div id="att-body">${loadingHTML()}</div>`);
-  const me = state.profile.id;
-  const rates = await getAttRates();
-  const { data: rows } = await sb.from("biz_attendance").select("*").eq("leader_id", me).order("work_date", { ascending: false }).order("start_time", { ascending: false });
-  const list = rows || [];
-  // Tìm ca đang mở (end_time null)
-  const openShift = list.find((x) => !x.end_time);
-  // Chỉ hiển thị ca đã đóng trong bảng history
-  const closedList = list.filter((x) => x.end_time);
-  // Gom theo tháng
-  const byMonth = {};
-  closedList.forEach((x) => { const k = (x.work_date || "").slice(0, 7); (byMonth[k] = byMonth[k] || []).push(x); });
-  const months = Object.keys(byMonth).sort().reverse();
-  // Đếm ngày đã CK để hiển thị trên nút toggle
-  const nPaid = closedList.filter((x) => x.status === "approved" && x.paid).length;
-  const monthCards = months.map((m) => {
-    const items = byMonth[m];
-    const approved = items.filter((x) => x.status === "approved");
-    const nCaNhan = approved.filter((x) => x.transport === "ca_nhan").length;
-    const nXeOm = approved.filter((x) => x.transport === "xe_om").length;
-    const totalMoney = nCaNhan * rates.ca_nhan + nXeOm * rates.xe_om;
-    const paidMoney = approved.filter((x) => x.paid).reduce((s, x) => s + (x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om), 0);
-    const unpaidMoney = totalMoney - paidMoney;
-    const trows = items.map((x) => {
-      const isPaidRow = x.status === "approved" && x.paid;
-      const gpsIn = (x.lat != null && x.lng != null)
-        ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="Vào ca: ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Vào</a>`
-        : '<span class="meta">—</span>';
-      const gpsOut = (x.lat_out != null && x.lng_out != null)
-        ? ` · <a href="https://www.google.com/maps?q=${x.lat_out},${x.lng_out}" target="_blank" rel="noopener" title="Tan ca: ${x.lat_out.toFixed(5)}, ${x.lng_out.toFixed(5)}">📍 Tan</a>`
-        : '';
-      return `<tr${isPaidRow ? ' class="att-paid-row"' : ""}>
-      <td>${fmtDate(x.work_date)}</td>
-      <td>${x.start_time.slice(0, 5)} – ${x.end_time.slice(0, 5)}</td>
-      <td>${transportLabel(x.transport)}</td>
-      <td>${attStatusBadge(x.status)}${isPaidRow ? ' <span class="badge green">Đã CK</span>' : ""}</td>
-      <td>${gpsIn}${gpsOut}</td>
-      <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td>
-      <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`;
-    }).join("");
-    return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-        <b>Tháng ${m.split("-").reverse().join("/")}</b>
-        <span class="meta">Ngày công đã duyệt: <b>${approved.length}</b> (${nCaNhan} xe cá nhân + ${nXeOm} xe ôm) · Phụ cấp: <b>${fmtVND(totalMoney)}</b> (đã CK: ${fmtVND(paidMoney)}${unpaidMoney > 0 ? ", chưa CK: " + fmtVND(unpaidMoney) : ""})</span></div>
-      <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:14%"><col style="width:14%"><col style="width:16%"><col style="width:20%"><col style="width:8%"></colgroup>
-        <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Vị trí</th><th>Ghi chú Admin</th><th></th></tr></thead>
-        <tbody>${trows}</tbody></table></div></div>`;
-  }).join("");
-
-  // Panel vào ca / tan ca
-  let actionPanel;
-  if (openShift) {
-    const startMs = new Date(openShift.work_date + "T" + openShift.start_time).getTime();
-    const elapsed = (Date.now() - startMs) / 3600000;
-    actionPanel = `
-      <div class="card" style="border:2px solid var(--amber);background:#fef8ec">
-        <div style="font-weight:700;font-size:1.05rem">⏱ Đang trong ca</div>
-        <p class="meta" style="margin:6px 0">Vào ca lúc: <b>${fmtDate(openShift.work_date)} ${openShift.start_time.slice(0,5)}</b> · Phương tiện: <b>${transportLabel(openShift.transport)}</b>${openShift.note ? " · Ghi chú: " + esc(openShift.note) : ""}</p>
-        ${openShift.lat != null ? `<p class="meta" style="margin:4px 0">📍 Vị trí vào ca: <a href="https://www.google.com/maps?q=${openShift.lat},${openShift.lng}" target="_blank" rel="noopener">${openShift.lat.toFixed(5)}, ${openShift.lng.toFixed(5)}</a></p>` : ''}
-        <p class="meta" style="margin:4px 0">Đã làm: <b>${elapsed.toFixed(1)}h</b>${elapsed > 12 ? ' <span style="color:var(--red)">⚠ Ca kéo dài quá 12h — nếu bạn quên tan ca, hãy bấm "Huỷ ca" và vào ca lại.</span>' : ''}</p>
-        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
-          <button class="btn ghost sm" id="att-gps-out" type="button">📍 Lấy định vị GPS</button>
-          <span id="att-gps-status-out" class="meta">Chưa có GPS — bắt buộc trước khi tan ca</span>
-          <button class="btn danger" id="att-cancel-shift" type="button">Huỷ ca</button>
-          <button class="btn success" id="att-clock-out" type="button" style="margin-left:auto">🔴 Tan ca</button>
-        </div>
-      </div>`;
-  } else {
-    actionPanel = `
-      <div class="card">
-        <div style="font-weight:700;font-size:1.05rem">Vào ca</div>
-        <p class="meta" style="margin:4px 0 8px">Bấm nút khi bắt đầu làm việc — hệ thống sẽ ghi lại <b>thời gian hiện tại</b> và <b>vị trí GPS</b>. Khi về, bấm "Tan ca" để kết thúc. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>. Thời gian làm phải ≥ 2h mới được tính 1 ngày công.</p>
-        <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
-          <div class="field" style="max-width:220px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
-          <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm nay"/></div>
-        </div>
-        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
-          <button class="btn ghost sm" id="att-gps" type="button">📍 Lấy định vị GPS</button>
-          <span id="att-gps-status" class="meta">Chưa có GPS — bắt buộc trước khi vào ca</span>
-          <button class="btn success" id="att-clock-in" type="button" style="margin-left:auto">🔵 Vào ca</button>
-        </div>
-      </div>`;
-  }
-
-  document.getElementById("att-body").innerHTML = `
-    <style>.att-paid-row.hidden{display:none}</style>
-    ${actionPanel}
-    ${nPaid > 0 ? `<div style="margin:10px 0"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nPaid} ngày đã CK</button></div>` : ""}
-    ${monthCards || `<div class="empty"><div class="em">🕒</div><p>Chưa có ngày công nào.</p></div>`}`;
-  // Mặc định ẩn ngày đã CK
-  document.querySelectorAll(".att-paid-row").forEach((r) => r.classList.add("hidden"));
-  const togBtn = document.getElementById("att-toggle-paid");
-  if (togBtn) {
-    let shown = false;
-    togBtn.onclick = () => {
-      shown = !shown;
-      document.querySelectorAll(".att-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
-      togBtn.textContent = shown ? `🙈 Ẩn ${nPaid} ngày đã CK` : `👁 Hiện ${nPaid} ngày đã CK`;
-    };
-  }
-  // Helper GPS chung
-  const setupGPS = (btnId, statusId) => {
-    const state = { loc: null };
-    const btn = document.getElementById(btnId);
-    const statusEl = document.getElementById(statusId);
-    if (!btn) return state;
-    btn.onclick = (e) => {
-      if (!navigator.geolocation) { statusEl.innerHTML = '<span style="color:var(--red)">Trình duyệt không hỗ trợ GPS</span>'; return; }
-      e.target.disabled = true;
-      statusEl.textContent = "⏳ Đang lấy GPS...";
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          state.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-          statusEl.innerHTML = `<span style="color:var(--green)">✓ ${state.loc.lat.toFixed(5)}, ${state.loc.lng.toFixed(5)}</span> · độ chính xác ~${Math.round(pos.coords.accuracy)}m`;
-          e.target.disabled = false;
-          e.target.textContent = "📍 Lấy lại GPS";
-        },
-        (err) => {
-          statusEl.innerHTML = `<span style="color:var(--red)">❌ ${err.message} — cần bật quyền định vị</span>`;
-          e.target.disabled = false;
-        },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-      );
-    };
-    return state;
-  };
-
-  if (openShift) {
-    // === TAN CA ===
-    const gps = setupGPS("att-gps-out", "att-gps-status-out");
-    document.getElementById("att-clock-out").onclick = async (e) => {
-      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi tan ca', "err");
-      const now = new Date();
-      const elapsed = (now.getTime() - new Date(openShift.work_date + "T" + openShift.start_time).getTime()) / 3600000;
-      if (elapsed > 12 && !confirm(`Ca đã mở ${elapsed.toFixed(1)}h — khá dài. Chắc chắn tan ca với thời gian hiện tại?`)) return;
-      const nowTime = now.toTimeString().slice(0, 8);
-      e.target.disabled = true;
-      const { error } = await sb.from("biz_attendance").update({
-        end_time: nowTime,
-        lat_out: gps.loc.lat, lng_out: gps.loc.lng, loc_at_out: now.toISOString(),
-      }).eq("id", openShift.id);
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-      toast(`Đã tan ca sau ${elapsed.toFixed(1)}h. Chờ Admin duyệt.`, "ok"); leaderAttendance();
-    };
-    document.getElementById("att-cancel-shift").onclick = async () => {
-      if (!confirm("Huỷ ca này? Dữ liệu vào ca (bao gồm GPS) sẽ bị xoá vĩnh viễn.")) return;
-      const { error } = await sb.from("biz_attendance").delete().eq("id", openShift.id);
-      if (error) return toast("Lỗi: " + error.message, "err");
-      toast("Đã huỷ ca", "ok"); leaderAttendance();
-    };
-  } else {
-    // === VÀO CA ===
-    const gps = setupGPS("att-gps", "att-gps-status");
-    document.getElementById("att-clock-in").onclick = async (e) => {
-      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi vào ca', "err");
-      const now = new Date();
-      const nowDate = now.toISOString().slice(0, 10);
-      const nowTime = now.toTimeString().slice(0, 8);
-      e.target.disabled = true;
-      const { error } = await sb.from("biz_attendance").insert({
-        leader_id: me, work_date: nowDate, start_time: nowTime, end_time: null,
-        transport: document.getElementById("att-transport").value,
-        note: document.getElementById("att-note").value.trim(),
-        lat: gps.loc.lat, lng: gps.loc.lng, loc_at: now.toISOString(),
-      });
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-      toast(`Đã vào ca lúc ${nowTime.slice(0,5)}`, "ok"); leaderAttendance();
-    };
-  }
-  on("[data-attdel]", "click", async (e) => {
-    if (!confirm("Xoá khai báo này?")) return;
-    const { error } = await sb.from("biz_attendance").delete().eq("id", e.currentTarget.dataset.attdel);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã xoá", "ok"); leaderAttendance();
-  });
-}
-
-// ==== Tab Chấm công của Admin ====
-async function bizAttendance() {
-  bcontent().innerHTML = loadingHTML();
-  const rates = await getAttRates();
-
-  // Lấy chấm công + Leader + Nhân viên
-  const [
-    { data: rows, error },
-    { data: leaders, error: leaderError },
-    { data: employees, error: empError }
-  ] = await Promise.all([
-    sb.from("biz_attendance")
-      .select("*")
-      .order("work_date", { ascending: false })
-      .order("created_at", { ascending: false }),
-
-    // Không lấy bank_account, bank_code từ profiles nữa
-    sb.from("profiles")
-      .select("id,full_name,email,biz_employee_id,role")
-      .eq("role", "leader"),
-
-    // STK + ngân hàng lấy từ Nhân viên
-    sb.from("biz_employees")
-      .select("id,name,bank_account,bank_code")
-  ]);
-
-  if (error) {
-    bcontent().innerHTML =
-      `<div class="empty">Lỗi tải chấm công: ${esc(error.message)}</div>`;
-    return;
-  }
-
-  if (leaderError) {
-    bcontent().innerHTML =
-      `<div class="empty">Lỗi tải Leader: ${esc(leaderError.message)}</div>`;
-    return;
-  }
-
-  if (empError) {
-    bcontent().innerHTML =
-      `<div class="empty">Lỗi tải nhân viên: ${esc(empError.message)}</div>`;
-    return;
-  }
-
-  const list = rows || [];
-
-  // Chuẩn hoá tên để so sánh dự phòng
-  const normName = (s) =>
-    removeVN(String(s || ""))
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " ");
-
-  // ============================================================
-  // Ghép Leader với Nhân viên để lấy STK
-  // Ưu tiên:
-  // 1. profiles.biz_employee_id == biz_employees.id
-  // 2. Nếu chưa liên kết thì thử khớp theo tên
-  // ============================================================
-  const leaderById = {};
-
-  (leaders || []).forEach((l) => {
-    let emp = null;
-
-    // Ưu tiên liên kết ID
-    if (l.biz_employee_id) {
-      emp = (employees || []).find(
-        (e) => String(e.id) === String(l.biz_employee_id)
-      );
-    }
-
-    // Dự phòng khớp tên
-    if (!emp) {
-      emp = (employees || []).find(
-        (e) => normName(e.name) === normName(l.full_name)
-      );
-    }
-
-    leaderById[l.id] = {
-      ...l,
-
-      employee_id: emp ? emp.id : null,
-
-      bank_account:
-        emp && emp.bank_account
-          ? emp.bank_account
-          : "",
-
-      bank_code:
-        emp && emp.bank_code
-          ? emp.bank_code
-          : ""
-    };
-  });
-
-  // ===========================
-  // Filter
-  // ===========================
-  const monthOpts = [
-    ...new Set(
-      list.map((x) => (x.work_date || "").slice(0, 7))
-    )
-  ].sort().reverse();
-
-  // Mặc định: "" = xem tất cả các tháng (tránh sót row chưa CK khi 2-3 tháng
-  // mới thanh toán 1 lần). User vẫn có thể chọn 1 tháng cụ thể trong dropdown.
-  const currentMonth =
-    state.params.att_month != null
-      ? state.params.att_month
-      : "";
-
-  const filterLeader = state.params.att_leader || "";
-  const filterStatus = state.params.att_status || "";
-
-  const filtered = list.filter((x) =>
-    (!currentMonth ||
-      (x.work_date || "").slice(0, 7) === currentMonth) &&
-    (!filterLeader || x.leader_id === filterLeader) &&
-    (!filterStatus || x.status === filterStatus)
-  );
-
-  const pendingCnt = list.filter(
-    (x) => x.status === "pending"
-  ).length;
-
-  // ===========================
-  // Nhóm theo Leader
-  // ===========================
-  const byLeader = {};
-
-  filtered.forEach((x) => {
-    (byLeader[x.leader_id] =
-      byLeader[x.leader_id] || []).push(x);
-  });
-
-  // Sort rows trong mỗi leader: pending → approved chưa CK → rejected → approved + đã CK (ẩn mặc định)
-  const rowPriority = (x) =>
-    x.status === "pending" ? 0
-    : x.status === "approved" && !x.paid ? 1
-    : x.status === "rejected" ? 2
-    : 3; // approved + paid
-  Object.keys(byLeader).forEach((lid) => {
-    byLeader[lid].sort((a, b) => rowPriority(a) - rowPriority(b));
-  });
-
-  // Sort leader: ưu tiên có pending hoặc chưa CK → đầu; cuối cùng là leader chỉ còn ngày đã CK
-  const activeCount = (lid) =>
-    byLeader[lid].filter((x) => x.status === "pending" || (x.status === "approved" && !x.paid) || x.status === "rejected").length;
-  const leaderOrder = Object.keys(byLeader).sort((a, b) => {
-    const aa = activeCount(a), ab = activeCount(b);
-    if (aa !== ab) return ab - aa; // nhiều mục cần chú ý hơn → đầu
-    const pa = byLeader[a].filter((x) => x.status === "pending").length;
-    const pb = byLeader[b].filter((x) => x.status === "pending").length;
-    if (pa !== pb) return pb - pa;
-    const na = (leaderById[a] && leaderById[a].full_name) || "";
-    const nb = (leaderById[b] && leaderById[b].full_name) || "";
-    return na.localeCompare(nb, "vi");
-  });
-  // Đếm tổng số row đã CK và thẻ leader "all paid" để hiển thị trên nút toggle
-  const nAllPaidRows = filtered.filter((x) => x.status === "approved" && x.paid).length;
-  const nAllPaidLeaders = leaderOrder.filter((lid) => activeCount(lid) === 0).length;
-
-  // ===========================
-  // Render
-  // ===========================
-  bcontent().innerHTML = `
-    <div class="pill-row"
-         style="align-items:center;gap:6px;flex-wrap:wrap">
-
-      <select id="att-month" style="max-width:160px">
-        <option value="" ${currentMonth === "" ? "selected" : ""}>Tất cả các tháng</option>
-        ${
-          monthOpts.map((m) => `
-            <option value="${m}"
-              ${m === currentMonth ? "selected" : ""}>
-              Tháng ${m.split("-").reverse().join("/")}
-            </option>
-          `).join("")
-        }
-      </select>
-
-      <select id="att-leader" style="max-width:220px">
-        <option value="">Tất cả Leader</option>
-
-        ${(leaders || []).map((l) => `
-          <option value="${l.id}"
-            ${l.id === filterLeader ? "selected" : ""}>
-            ${esc(l.full_name)}
-          </option>
-        `).join("")}
-
-      </select>
-
-      <select id="att-status" style="max-width:150px">
-        <option value="">Mọi trạng thái</option>
-
-        <option value="pending"
-          ${filterStatus === "pending" ? "selected" : ""}>
-          Chờ duyệt${pendingCnt ? ` (${pendingCnt})` : ""}
-        </option>
-
-        <option value="approved"
-          ${filterStatus === "approved" ? "selected" : ""}>
-          Đã duyệt
-        </option>
-
-        <option value="rejected"
-          ${filterStatus === "rejected" ? "selected" : ""}>
-          Từ chối
-        </option>
-      </select>
-
-      <button class="btn secondary sm" id="att-rates">
-        ⚙ Đơn giá phụ cấp
-      </button>
-    </div>
-
-    <p class="meta" style="margin:6px 0 8px">
-      Đơn giá hiện tại:
-      Xe cá nhân <b>${fmtVND(rates.ca_nhan)}/ngày</b> ·
-      Xe ôm <b>${fmtVND(rates.xe_om)}/ngày</b>.
-      Chỉ tính 1 ngày công khi thời gian làm ≥ 2h.
-    </p>
-
-    <style>#att-list .att-paid-row.hidden,#att-list .att-card-all-paid.hidden{display:none}</style>
-    ${(nAllPaidRows > 0 || nAllPaidLeaders > 0) ? `<div style="margin:4px 0 10px"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}</button></div>` : ""}
-    <div id="att-list">
-      ${
-        leaderOrder.length
-
-        ? leaderOrder.map((lid) => {
-
-          const l = leaderById[lid];
-          const its = byLeader[lid];
-
-          const approved = its.filter(
-            (x) => x.status === "approved"
-          );
-
-          const nCn = approved.filter(
-            (x) => x.transport === "ca_nhan"
-          ).length;
-
-          const nXo = approved.filter(
-            (x) => x.transport === "xe_om"
-          ).length;
-
-          const money =
-            nCn * rates.ca_nhan +
-            nXo * rates.xe_om;
-
-          const unpaidMoney = approved
-            .filter((x) => !x.paid)
-            .reduce(
-              (s, x) =>
-                s +
-                (
-                  x.transport === "ca_nhan"
-                    ? rates.ca_nhan
-                    : rates.xe_om
-                ),
-              0
-            );
-
-          const trows = its.map((x) => `
-            <tr${x.status === "approved" && x.paid ? ' class="att-paid-row"' : ""}>
-
-              <td>
-                ${fmtDate(x.work_date)}
-              </td>
-
-              <td>
-                ${x.start_time.slice(0, 5)}
-                –
-                ${x.end_time ? x.end_time.slice(0, 5) : '<span class="meta" style="color:var(--amber)">(đang mở)</span>'}
-
-                ${x.end_time ? `<span class="meta">
-                  (${attDuration(
-                    x.start_time,
-                    x.end_time
-                  ).toFixed(1)}h)
-                </span>` : ''}
-              </td>
-
-              <td>
-                ${transportLabel(x.transport)}
-              </td>
-
-              <td>
-                ${attStatusBadge(x.status)}
-
-                ${
-                  x.status === "approved" && x.paid
-                    ? ' <span class="badge green">Đã CK</span>'
-                    : ""
-                }
-              </td>
-
-              <td>
-                ${esc(x.note || "")}
-
-                ${
-                  x.admin_note
-                    ? `<div class="meta">
-                         💬 ${esc(x.admin_note)}
-                       </div>`
-                    : ""
-                }
-              </td>
-
-              <td style="white-space:nowrap">
-                ${
-                  x.lat != null && x.lng != null
-                    ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="Vào ca: ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Vào</a>`
-                    : '<span class="meta" style="color:var(--amber)">⚠</span>'
-                }${
-                  x.lat_out != null && x.lng_out != null
-                    ? ` · <a href="https://www.google.com/maps?q=${x.lat_out},${x.lng_out}" target="_blank" rel="noopener" title="Tan ca: ${x.lat_out.toFixed(5)}, ${x.lng_out.toFixed(5)}">📍 Tan</a>`
-                    : (x.end_time ? ' · <span class="meta" style="color:var(--amber)">⚠</span>' : '')
-                }
-                ${!x.end_time ? '<div class="meta" style="color:var(--amber)">⏱ Chưa tan ca</div>' : ''}
-              </td>
-
-              <td style="white-space:nowrap">
-
-                ${
-                  x.status === "pending"
-                    ? `
-                      <button
-                        class="btn success sm"
-                        data-attapprove="${x.id}">
-                        ✓ Duyệt
-                      </button>
-
-                      <button
-                        class="btn danger sm"
-                        data-attreject="${x.id}">
-                        Từ chối
-                      </button>
-                    `
-                    : ""
-                }
-
-                ${
-                  x.status !== "pending"
-                    ? `
-                      <button
-                        class="btn ghost sm"
-                        data-attreopen="${x.id}">
-                        Mở lại
-                      </button>
-                    `
-                    : ""
-                }
-
-              </td>
-
-            </tr>
-          `).join("");
-
-          const nPending = its.filter((x) => x.status === "pending").length;
-          const isAllPaid = activeCount(lid) === 0;
-          return `
-            <div class="card${isAllPaid ? " att-card-all-paid" : ""}"${nPending > 0 ? ' style="border:2px solid var(--amber)"' : ""}>
-
-              <div style="
-                display:flex;
-                justify-content:space-between;
-                align-items:baseline;
-                flex-wrap:wrap;
-                gap:8px;
-              ">
-
-                <b>
-                  ${esc(l ? l.full_name : "(?)")}
-                  ${nPending > 0 ? `<span class="badge amber">⏳ ${nPending} chờ duyệt</span>` : ""}
-                </b>
-
-                <span class="meta">
-
-                  Đã duyệt:
-                  <b>${approved.length}</b> ngày
-                  (${nCn} cá nhân + ${nXo} xe ôm)
-
-                  · Phụ cấp:
-                  <b>${fmtVND(money)}</b>
-
-                  ${
-                    unpaidMoney > 0
-                      ? `
-                        ·
-                        <b style="color:var(--amber)">
-                          Chưa CK:
-                          ${fmtVND(unpaidMoney)}
-                        </b>
-                      `
-                      : ""
-                  }
-
-                  ${
-                    l &&
-                    l.bank_account &&
-                    l.bank_code &&
-                    unpaidMoney > 0
-
-                    ? `
-                      <button
-                        class="btn sm"
-                        data-attqr="${l.id}"
-                        data-month="${currentMonth}"
-                        style="margin-left:6px">
-                        💰 QR trả phụ cấp
-                      </button>
-                    `
-
-                    : unpaidMoney > 0
-                      ? `
-                        <span
-                          class="badge amber"
-                          style="margin-left:6px">
-                          Chưa có STK
-                        </span>
-                      `
-                      : ""
-                  }
-
-                </span>
-
-              </div>
-
-              <div
-                class="table-wrap"
-                style="margin-top:8px">
-
-                <table
-                  style="
-                    table-layout:fixed;
-                    width:100%
-                  ">
-
-                  <colgroup>
-                    <col style="width:10%">
-                    <col style="width:16%">
-                    <col style="width:14%">
-                    <col style="width:14%">
-                    <col style="width:20%">
-                    <col style="width:10%">
-                    <col style="width:16%">
-                  </colgroup>
-
-                  <thead>
-                    <tr>
-                      <th>Ngày</th>
-                      <th>Giờ</th>
-                      <th>Phương tiện</th>
-                      <th>Trạng thái</th>
-                      <th>Ghi chú</th>
-                      <th>Vị trí</th>
-                      <th></th>
-                    </tr>
-                  </thead>
-
-                  <tbody>
-                    ${trows}
-                  </tbody>
-
-                </table>
-
-              </div>
-
-            </div>
-          `;
-        }).join("")
-
-        : `
-          <div class="empty">
-            <div class="em">🕒</div>
-            <p>
-              Không có khai báo nào trong bộ lọc này.
-            </p>
-          </div>
-        `
-      }
-    </div>
-  `;
-
-  // ===========================
-  // Filter events
-  // ===========================
-  const chgFilter = (k, v) => go(
-    "biz-home",
-    {
-      btab: "attendance",
-
-      att_month:
-        k === "att_month"
-          ? v
-          : currentMonth,
-
-      att_leader:
-        k === "att_leader"
-          ? v
-          : filterLeader,
-
-      att_status:
-        k === "att_status"
-          ? v
-          : filterStatus
-    }
-  );
-
-  document.getElementById("att-month").onchange =
-    (e) =>
-      chgFilter(
-        "att_month",
-        e.target.value
-      );
-
-  document.getElementById("att-leader").onchange =
-    (e) =>
-      chgFilter(
-        "att_leader",
-        e.target.value
-      );
-
-  document.getElementById("att-status").onchange =
-    (e) =>
-      chgFilter(
-        "att_status",
-        e.target.value
-      );
-
-  document.getElementById("att-rates").onclick =
-    () => openAttRatesModal(rates);
-
-  // ===========================
-  // TOGGLE ẨN/HIỆN ĐÃ CK
-  // ===========================
-  document.querySelectorAll("#att-list .att-paid-row").forEach((r) => r.classList.add("hidden"));
-  document.querySelectorAll("#att-list .att-card-all-paid").forEach((c) => c.classList.add("hidden"));
-  const attTogBtn = document.getElementById("att-toggle-paid");
-  if (attTogBtn) {
-    let shown = false;
-    attTogBtn.onclick = () => {
-      shown = !shown;
-      document.querySelectorAll("#att-list .att-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
-      document.querySelectorAll("#att-list .att-card-all-paid").forEach((c) => c.classList.toggle("hidden", !shown));
-      attTogBtn.textContent = shown
-        ? `🙈 Ẩn ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}`
-        : `👁 Hiện ${nAllPaidRows} ngày đã CK${nAllPaidLeaders > 0 ? ` (${nAllPaidLeaders} leader đã CK hết)` : ""}`;
-    };
-  }
-
-  // ===========================
-  // DUYỆT
-  // ===========================
-  on("[data-attapprove]", "click", async (e) => {
-
-    const { error } =
-      await sb
-        .from("biz_attendance")
-        .update({
-          status: "approved",
-          admin_note: "",
-          updated_at:
-            new Date().toISOString()
-        })
-        .eq(
-          "id",
-          e.currentTarget.dataset.attapprove
-        );
-
-    if (error)
-      return toast(
-        "Lỗi: " + error.message,
-        "err"
-      );
-
-    toast("Đã duyệt", "ok");
-    bizAttendance();
-
-  }, bcontent());
-
-  // ===========================
-  // TỪ CHỐI
-  // ===========================
-  on("[data-attreject]", "click", async (e) => {
-
-    const note = prompt(
-      "Ghi chú từ chối (Leader sẽ thấy):",
-      ""
-    );
-
-    if (note === null)
-      return;
-
-    const { error } =
-      await sb
-        .from("biz_attendance")
-        .update({
-          status: "rejected",
-          admin_note: note,
-          updated_at:
-            new Date().toISOString()
-        })
-        .eq(
-          "id",
-          e.currentTarget.dataset.attreject
-        );
-
-    if (error)
-      return toast(
-        "Lỗi: " + error.message,
-        "err"
-      );
-
-    toast("Đã từ chối", "ok");
-    bizAttendance();
-
-  }, bcontent());
-
-  // ===========================
-  // MỞ LẠI
-  // ===========================
-  on("[data-attreopen]", "click", async (e) => {
-
-    const { error } =
-      await sb
-        .from("biz_attendance")
-        .update({
-          status: "pending",
-          admin_note: "",
-          updated_at:
-            new Date().toISOString()
-        })
-        .eq(
-          "id",
-          e.currentTarget.dataset.attreopen
-        );
-
-    if (error)
-      return toast(
-        "Lỗi: " + error.message,
-        "err"
-      );
-
-    bizAttendance();
-
-  }, bcontent());
-
-  // ===========================
-  // QR TRẢ PHỤ CẤP
-  // ===========================
-  on("[data-attqr]", "click", (e) => {
-
-    const l =
-      leaderById[
-        e.currentTarget.dataset.attqr
-      ];
-
-    showAttPayQR(
-      l,
-      e.currentTarget.dataset.month,
-      rates
-    );
-
-  }, bcontent());
-}
-
-async function openAttRatesModal(rates) {
-  showModal("Đơn giá phụ cấp", `
-    <div class="field"><label>Xe cá nhân (đ/ngày)</label><input id="rt-ca" type="number" value="${rates.ca_nhan || 0}"/></div>
-    <div class="field"><label>Xe ôm công nghệ (đ/ngày)</label><input id="rt-xe" type="number" value="${rates.xe_om || 0}"/></div>`,
-    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="rt-save">Lưu</button>`);
-  document.getElementById("rt-save").onclick = async (e) => {
-    const val = { ca_nhan: Number(document.getElementById("rt-ca").value) || 0, xe_om: Number(document.getElementById("rt-xe").value) || 0 };
-    e.target.disabled = true;
-    const { error } = await sb.from("biz_settings").upsert({ key: "att_rates", value: val }, { onConflict: "key" });
-    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    toast("Đã lưu", "ok"); closeModal(); bizAttendance();
-  };
-}
-
-async function showAttPayQR(leader, month, rates) {
-  if (!leader || !leader.bank_account || !leader.bank_code) { toast("Leader chưa có STK/ngân hàng.", "err"); return; }
-  showModal("Trả phụ cấp — " + esc(leader.full_name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
-  const body = modalRoot().querySelector(".modal-body");
-  const { data: rowsUnpaid } = await sb.from("biz_attendance").select("*").eq("leader_id", leader.id).eq("status", "approved").eq("paid", false).order("work_date", { ascending: true });
-  let unpaid = rowsUnpaid || [];
-  if (month) unpaid = unpaid.filter((x) => (x.work_date || "").slice(0, 7) === month);
-  if (!unpaid.length) { body.innerHTML = `<div class="empty">${month ? "Không còn ngày công nào chưa CK cho tháng này." : "Không còn ngày công nào chưa CK cho leader này."}</div>`; return; }
-  const rows = unpaid.map((x) => `<tr>
-    <td><input type="checkbox" class="attp-chk" data-id="${x.id}" data-amt="${x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om}" checked/></td>
-    <td>${fmtDate(x.work_date)}</td>
-    <td>${x.start_time.slice(0, 5)}–${x.end_time ? x.end_time.slice(0, 5) : "?"}</td>
-    <td>${transportLabel(x.transport)}</td>
-    <td style="text-align:right"><b>${fmtVND(x.transport === "ca_nhan" ? rates.ca_nhan : rates.xe_om)}</b></td></tr>`).join("");
-  body.innerHTML = `
-    <div style="display:grid;grid-template-columns:1.4fr 1fr;gap:16px">
-      <div>
-        <div class="pill-row"><button class="btn ghost sm" id="attp-all">Chọn tất cả</button><button class="btn ghost sm" id="attp-none">Bỏ chọn</button></div>
-        <div class="table-wrap"><table><thead><tr><th></th><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th style="text-align:right">Số tiền</th></tr></thead><tbody>${rows}</tbody></table></div>
-        <p class="meta" style="margin-top:6px">Nội dung CK: <code>${month ? "Phu cap thang " + month + " " : "Phu cap "}${esc(removeVN(leader.full_name))}</code></p>
-      </div>
-      <div style="text-align:center">
-        <div class="meta">Tổng thanh toán</div>
-        <div id="attp-sum" style="font-size:1.6rem;font-weight:800;color:var(--blue);margin-bottom:8px">0đ</div>
-        <img id="attp-qr" alt="VietQR" style="max-width:260px;width:100%;border:1px solid var(--line);border-radius:12px"/>
-        <p class="meta" style="margin-top:8px">${esc(bankLabel(leader.bank_code))} · STK: <b>${esc(leader.bank_account)}</b></p>
-        <button class="btn block" id="attp-done" style="margin-top:10px">✅ Đã CK — Đánh dấu đã trả</button>
-      </div>
-    </div>`;
-  const chks = () => [...body.querySelectorAll(".attp-chk")];
-  const picked = () => chks().filter((c) => c.checked);
-  const total = () => picked().reduce((s, c) => s + (Number(c.dataset.amt) || 0), 0);
-  const refreshQR = () => {
-    const amt = Math.max(0, Math.round(total()));
-    body.querySelector("#attp-sum").textContent = fmtVND(amt);
-    const img = body.querySelector("#attp-qr"), btn = body.querySelector("#attp-done");
-    if (amt <= 0) { img.style.display = "none"; btn.disabled = true; return; }
-    img.style.display = "block"; btn.disabled = false;
-    const info = (month ? "Phu cap thang " + month + " " : "Phu cap ") + removeVN(leader.full_name);
-    img.src = `https://img.vietqr.io/image/${encodeURIComponent(leader.bank_code)}-${encodeURIComponent(leader.bank_account)}-compact2.png?amount=${amt}&addInfo=${encodeURIComponent(info)}&accountName=${encodeURIComponent(removeVN(leader.full_name))}`;
-  };
-  chks().forEach((c) => c.onchange = refreshQR);
-  body.querySelector("#attp-all").onclick = () => { chks().forEach((c) => c.checked = true); refreshQR(); };
-  body.querySelector("#attp-none").onclick = () => { chks().forEach((c) => c.checked = false); refreshQR(); };
-  refreshQR();
-  body.querySelector("#attp-done").onclick = async (ev) => {
-    const ids = picked().map((c) => c.dataset.id); if (!ids.length) return toast("Chưa chọn ngày nào", "err");
-    if (!confirm(`Xác nhận đã chuyển ${fmtVND(total())} cho ${leader.full_name}?`)) return;
-    ev.target.disabled = true;
-    const { error } = await sb.from("biz_attendance").update({ paid: true }).in("id", ids);
-    if (error) { toast("Lỗi: " + error.message, "err"); ev.target.disabled = false; return; }
-    toast("Đã đánh dấu đã trả", "ok"); closeModal(); bizAttendance();
-  };
-}
-
-/* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt + Thông báo tuỳ chỉnh ---------- */
-const WEEKDAYS = [
-  { v: 2, s: "T2" }, { v: 3, s: "T3" }, { v: 4, s: "T4" },
-  { v: 5, s: "T5" }, { v: 6, s: "T6" }, { v: 7, s: "T7" }, { v: 8, s: "CN" },
-];
+/* ---------- Thông báo: phần việc Leader vừa gửi chờ duyệt ---------- */
 async function bizNotify() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: tasks, error }, { data: leaders }, { data: projects }, { data: anns }, { data: resps }, { data: allUsers }] = await Promise.all([
+  const [{ data: tasks, error }, { data: leaders }, { data: projects }] = await Promise.all([
     sb.from("biz_tasks").select("*").eq("status", "review").order("updated_at", { ascending: false }),
     sb.from("profiles").select("id,full_name").eq("role", "leader"),
     sb.from("biz_projects").select("id,name"),
-    sb.from("biz_announcements").select("*").order("created_at", { ascending: false }),
-    sb.from("biz_announcement_responses").select("announcement_id,user_id,responded_at,read_at"),
-    sb.from("profiles").select("id,full_name,role,email").in("role", ["leader", "gvhd", "tg", "admin"]),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải thông báo: ${esc(error.message)}</div>`; return; }
   const leaderById = {}; (leaders || []).forEach((l) => leaderById[(l.id || "").toLowerCase()] = l.full_name);
   const projById = {}; (projects || []).forEach((p) => projById[p.id] = p);
-  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
   const list = tasks || [];
-  const annList = anns || [];
-  const respByAnn = {}; (resps || []).forEach((r) => { (respByAnn[r.announcement_id] = respByAnn[r.announcement_id] || []).push(r); });
-  const annMap = {}; annList.forEach((a) => annMap[a.id] = a);
-  const taskRows = list.map((t) => `<div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+  if (!list.length) { bcontent().innerHTML = `<div class="empty"><div class="em">🔔</div><p>Không có phần việc nào đang chờ duyệt.</p></div>`; return; }
+  const rows = list.map((t) => `<div class="card" style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
       <div style="min-width:0">
         <div><b>${esc(leaderById[(t.assignee_id || "").toLowerCase()] || "(không rõ)")}</b> đã hoàn tất <b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}</div>
         <div class="meta">Dự án: ${esc(projById[t.project_id] ? projById[t.project_id].name : "(đã xoá)")} · ${fmtDT(t.updated_at)}</div>
@@ -1489,30 +531,7 @@ async function bizNotify() {
         <button class="btn success sm" data-ntapprove="${t.id}">✓ Duyệt</button>
         <button class="btn danger sm" data-ntrevise="${t.id}">Yêu cầu sửa</button>
       </div></div>`).join("");
-  const annRows = annList.map((a) => {
-    const nResp = (respByAnn[a.id] || []).filter((r) => r.responded_at).length;
-    const nRecip = (a.recipient_ids || []).length;
-    const typeBadge = a.type === "schedule_signup"
-      ? '<span class="badge amber">📅 Đăng ký lịch</span>'
-      : '<span class="badge blue">💬 Thông báo</span>';
-    const deadlineInfo = a.deadline ? ` · HSD: <b>${fmtDT(a.deadline)}</b>` : "";
-    return `<div class="card" style="cursor:pointer" data-annopen="${a.id}">
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
-        <div style="font-weight:700">${esc(a.title)} ${typeBadge}</div>
-        <span class="meta">${fmtDT(a.created_at)}${deadlineInfo}</span>
-      </div>
-      <div class="meta" style="margin-top:4px">👥 Gửi cho ${nRecip} người${a.type === "schedule_signup" ? ` · <b style="color:${nResp === nRecip ? "var(--green)" : "var(--amber)"}">${nResp}/${nRecip}</b> đã đăng ký` : ""}</div>
-      ${a.content ? `<div style="margin-top:6px;color:var(--ink-2);white-space:pre-wrap">${esc(a.content).slice(0, 160)}${a.content.length > 160 ? "..." : ""}</div>` : ""}
-    </div>`;
-  }).join("");
-  bcontent().innerHTML = `
-    <h3 style="margin:0 0 8px;font-size:1.05rem">🔔 Phần việc chờ duyệt (${list.length})</h3>
-    ${taskRows || `<div class="empty"><div class="em">✓</div><p>Không có phần việc nào đang chờ duyệt.</p></div>`}
-    <div style="margin:18px 0 10px;display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
-      <h3 style="margin:0;font-size:1.05rem">📣 Thông báo tuỳ chỉnh (${annList.length})</h3>
-      <button class="btn" id="ann-new">＋ Tạo thông báo</button>
-    </div>
-    ${annRows || `<div class="empty"><div class="em">📭</div><p>Chưa có thông báo nào. Bấm "Tạo thông báo" để gửi lịch học, hỏi ý kiến, ...</p></div>`}`;
+  bcontent().innerHTML = `<p class="meta" style="margin:0 0 10px">Có <b>${list.length}</b> phần việc chờ duyệt. Duyệt hoặc yêu cầu sửa xong thì thông báo tự ẩn.</p>${rows}`;
   on("[data-ntapprove]", "click", async (e) => {
     const { error } = await sb.from("biz_tasks").update({ status: "done", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.ntapprove);
     if (error) return toast("Lỗi: " + error.message, "err");
@@ -1525,678 +544,6 @@ async function bizNotify() {
     if (error) return toast("Lỗi: " + error.message, "err");
     toast("Đã gửi yêu cầu chỉnh sửa", "ok"); bizHome();
   }, bcontent());
-  document.getElementById("ann-new").onclick = () => openBizAnnouncementModal(null, allUsers || []);
-  on("[data-annopen]", "click", (e) => viewBizAnnouncementAdmin(annMap[e.currentTarget.dataset.annopen], allUsers || []), bcontent());
-}
-
-/* === Modal tạo/sửa Thông báo === */
-async function openBizAnnouncementModal(ex, allUsers) {
-  ex = ex || {};
-  const isEdit = !!ex.id;
-  const type = ex.type || "text";
-  const cfg = ex.config || { shifts: [{ label: "Ca 1", start: "19:00", end: "20:30" }], days: [2,3,4,5,6,7,8] };
-  const recipSet = new Set(ex.recipient_ids || []);
-  const groupedUsers = { admin: [], leader: [], gvhd: [], tg: [] };
-  (allUsers || []).forEach((u) => { if (groupedUsers[u.role]) groupedUsers[u.role].push(u); });
-  const roleLbl = { admin: "Admin", leader: "Leader", gvhd: "GVHD", tg: "Tác giả" };
-  // Load tất cả dự án + members để tạo nút tiện ích "Thêm Leader dạy + TG của tất cả dự án"
-  // (không filter completed_at vì "hoàn thành" là xong SP+thanh toán, không liên quan dạy học)
-  const [{ data: allProjs }, { data: pjMembers }] = await Promise.all([
-    sb.from("biz_projects").select("id,name,teaching_leader_id"),
-    sb.from("biz_project_members").select("project_id,profile_id"),
-  ]);
-  // Gom các user cần auto-select: tất cả teaching_leader_id + tất cả TG của mọi dự án
-  const autoSelectIds = new Set();
-  (allProjs || []).forEach((p) => { if (p.teaching_leader_id) autoSelectIds.add(p.teaching_leader_id); });
-  const allProjIds = new Set((allProjs || []).map((p) => p.id));
-  const userRole = {}; (allUsers || []).forEach((u) => userRole[u.id] = u.role);
-  (pjMembers || []).forEach((m) => {
-    if (!allProjIds.has(m.project_id)) return;
-    if (userRole[m.profile_id] === "tg") autoSelectIds.add(m.profile_id);
-  });
-  const userCheckboxes = Object.keys(groupedUsers).map((r) => {
-    if (!groupedUsers[r].length) return "";
-    return `<details ${recipSet.size === 0 ? "" : "open"} style="margin-bottom:6px"><summary style="cursor:pointer;font-weight:600">${roleLbl[r]} <button type="button" class="btn ghost sm" data-selall="${r}" style="margin-left:6px">Chọn tất cả</button><button type="button" class="btn ghost sm" data-selnone="${r}">Bỏ chọn</button></summary>
-      <div style="padding:6px 0 0 10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:4px">
-        ${groupedUsers[r].map((u) => `<label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:.9rem"><input type="checkbox" class="ann-recip" data-role="${r}" value="${u.id}" ${recipSet.has(u.id) ? "checked" : ""}/> ${esc(u.full_name || u.email || "(?)")}</label>`).join("")}
-      </div></details>`;
-  }).join("");
-  const shiftRows = (cfg.shifts || []).map((s, i) => renderShiftRow(s, i)).join("");
-  const dayChecks = WEEKDAYS.map((d) => `<label style="display:inline-flex;gap:4px;align-items:center;margin-right:10px;cursor:pointer"><input type="checkbox" class="ann-day" value="${d.v}" ${(cfg.days || []).includes(d.v) ? "checked" : ""}/> ${d.s}</label>`).join("");
-  showModal(isEdit ? "Sửa thông báo" : "Tạo thông báo", `
-    <div class="field"><label>Loại *</label><select id="ann-type">
-      <option value="text" ${type === "text" ? "selected" : ""}>💬 Thông báo thường (chỉ đọc)</option>
-      <option value="schedule_signup" ${type === "schedule_signup" ? "selected" : ""}>📅 Đăng ký lịch học (user tick ngày + ca)</option>
-    </select></div>
-    <div class="field"><label>Tiêu đề *</label><input id="ann-title" value="${esc(ex.title || "")}" placeholder="VD: Đăng ký lịch học tuần tới"/></div>
-    <div class="field"><label>Người nhận * <span id="ann-recip-count" style="color:var(--blue-d);font-weight:600">(0 đã chọn)</span></label>
-      <div style="margin-bottom:6px"><button type="button" class="btn secondary sm" id="ann-add-project-users">✨ Thêm Leader dạy + TG của tất cả ${(allProjs || []).length} dự án (${autoSelectIds.size} người)</button></div>
-      <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${userCheckboxes || '<p class="meta">Không có user</p>'}</div>
-    </div>
-    <div class="field"><label>Nội dung</label><textarea id="ann-content" rows="3" placeholder="Mô tả chi tiết, hướng dẫn...">${esc(ex.content || "")}</textarea></div>
-    <div class="field"><label>Link đính kèm (Google Meet, Drive, ...)</label><input id="ann-link" value="${esc(ex.link_url || "")}" placeholder="https://meet.google.com/..."/></div>
-    <div class="field"><label>Hạn chót (không bắt buộc)</label><input id="ann-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/></div>
-    <div id="ann-schedule-cfg" style="display:${type === "schedule_signup" ? "block" : "none"};border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0">
-      <div style="font-weight:600;margin-bottom:6px">⚙ Cấu hình lịch học</div>
-      <div style="font-size:.9rem;margin-bottom:4px">Các ca:</div>
-      <div id="ann-shifts">${shiftRows}</div>
-      <button type="button" class="btn ghost sm" id="ann-addshift" style="margin-top:4px">＋ Thêm ca</button>
-      <div style="font-size:.9rem;margin:10px 0 4px">Mở các ngày:</div>
-      <div>${dayChecks}</div>
-    </div>`,
-    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="ann-save">${isEdit ? "Lưu" : "Gửi"}</button>`, "lg");
-  const typeEl = document.getElementById("ann-type");
-  const schedCfg = document.getElementById("ann-schedule-cfg");
-  typeEl.onchange = () => { schedCfg.style.display = typeEl.value === "schedule_signup" ? "block" : "none"; };
-  const shiftsEl = document.getElementById("ann-shifts");
-  document.getElementById("ann-addshift").onclick = () => {
-    const n = shiftsEl.querySelectorAll(".ann-shift").length;
-    shiftsEl.insertAdjacentHTML("beforeend", renderShiftRow({ label: `Ca ${n+1}`, start: "20:30", end: "22:00" }, n));
-    bindShiftRemove();
-  };
-  const bindShiftRemove = () => {
-    shiftsEl.querySelectorAll("[data-rmshift]").forEach((b) => {
-      b.onclick = () => { b.closest(".ann-shift").remove(); };
-    });
-  };
-  bindShiftRemove();
-  const updCount = () => {
-    const n = document.querySelectorAll(".ann-recip:checked").length;
-    document.getElementById("ann-recip-count").textContent = `(${n} đã chọn)`;
-  };
-  updCount();
-  document.getElementById("ann-add-project-users").onclick = () => {
-    let added = 0;
-    autoSelectIds.forEach((uid) => {
-      const cb = document.querySelector(`.ann-recip[value="${uid}"]`);
-      if (cb && !cb.checked) { cb.checked = true; added++; }
-    });
-    // Mở các details có user được check
-    document.querySelectorAll(".ann-recip:checked").forEach((cb) => { const d = cb.closest("details"); if (d) d.open = true; });
-    updCount();
-    toast(`Đã chọn thêm ${added} người (Leader dạy + TG của tất cả dự án)`, "ok");
-  };
-  modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ann-recip")) updCount(); });
-  modalRoot().querySelectorAll("[data-selall]").forEach((b) => {
-    b.onclick = () => { modalRoot().querySelectorAll(`.ann-recip[data-role="${b.dataset.selall}"]`).forEach((c) => c.checked = true); updCount(); };
-  });
-  modalRoot().querySelectorAll("[data-selnone]").forEach((b) => {
-    b.onclick = () => { modalRoot().querySelectorAll(`.ann-recip[data-role="${b.dataset.selnone}"]`).forEach((c) => c.checked = false); updCount(); };
-  });
-  document.getElementById("ann-save").onclick = async (e) => {
-    const title = document.getElementById("ann-title").value.trim();
-    if (!title) return toast("Nhập tiêu đề", "err");
-    const type = typeEl.value;
-    const recipIds = [...document.querySelectorAll(".ann-recip:checked")].map((c) => c.value);
-    if (!recipIds.length) return toast("Chọn ít nhất 1 người nhận", "err");
-    let config = null;
-    if (type === "schedule_signup") {
-      const shifts = [...shiftsEl.querySelectorAll(".ann-shift")].map((row) => ({
-        label: row.querySelector(".sh-label").value.trim() || "Ca",
-        start: row.querySelector(".sh-start").value,
-        end: row.querySelector(".sh-end").value,
-      })).filter((s) => s.start && s.end);
-      const days = [...document.querySelectorAll(".ann-day:checked")].map((c) => Number(c.value));
-      if (!shifts.length) return toast("Cần ít nhất 1 ca", "err");
-      if (!days.length) return toast("Chọn ít nhất 1 ngày trong tuần", "err");
-      config = { shifts, days };
-    }
-    const dl = document.getElementById("ann-deadline").value;
-    const payload = {
-      title, content: document.getElementById("ann-content").value.trim(),
-      type, config, link_url: document.getElementById("ann-link").value.trim() || null,
-      recipient_ids: recipIds,
-      deadline: dl ? new Date(dl).toISOString() : null,
-    };
-    e.target.disabled = true;
-    if (isEdit) {
-      const { error } = await sb.from("biz_announcements").update(payload).eq("id", ex.id);
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    } else {
-      payload.created_by = state.profile.id;
-      const { error } = await sb.from("biz_announcements").insert(payload);
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    }
-    toast(isEdit ? "Đã lưu" : `Đã gửi tới ${recipIds.length} người`, "ok");
-    closeModal(); bizNotify();
-  };
-}
-function renderShiftRow(s, i) {
-  return `<div class="ann-shift row" style="gap:6px;align-items:center;margin-bottom:4px">
-    <input class="sh-label" value="${esc(s.label || "")}" placeholder="Tên ca" style="flex:1;min-width:100px"/>
-    <input class="sh-start" type="time" value="${esc(s.start || "")}" style="width:110px"/>
-    <span>–</span>
-    <input class="sh-end" type="time" value="${esc(s.end || "")}" style="width:110px"/>
-    <button type="button" class="btn danger sm" data-rmshift>✕</button>
-  </div>`;
-}
-
-/* === Admin xem chi tiết + responses === */
-async function viewBizAnnouncementAdmin(a, allUsers) {
-  if (!a) return;
-  showModal(a.title, loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
-  const body = modalRoot().querySelector(".modal-body");
-  const [{ data: resps }, { data: projs }, { data: members }] = await Promise.all([
-    sb.from("biz_announcement_responses").select("*").eq("announcement_id", a.id),
-    sb.from("biz_projects").select("id,name,teaching_leader_id"),
-    sb.from("biz_project_members").select("project_id,profile_id"),
-  ]);
-  const respByUser = {}; (resps || []).forEach((r) => respByUser[r.user_id] = r);
-  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
-  // Map user_id -> danh sách tên dự án mà user tham gia (CHỈ việc dạy / học, không tính task làm việc)
-  // - TG: lấy từ biz_project_members (được add là TG của dự án)
-  // - Leader: chỉ dự án mà họ được phân công DẠY (teaching_leader_id). Có task mà không dạy thì không tính.
-  const projNameById = {}; (projs || []).forEach((p) => projNameById[p.id] = p.name);
-  const userProjSet = {};
-  (members || []).forEach((m) => {
-    const u = userById[m.profile_id];
-    if (!u || u.role !== "tg") return;
-    if (!projNameById[m.project_id]) return;
-    (userProjSet[m.profile_id] = userProjSet[m.profile_id] || new Set()).add(projNameById[m.project_id]);
-  });
-  (projs || []).forEach((p) => {
-    if (!p.teaching_leader_id) return;
-    (userProjSet[p.teaching_leader_id] = userProjSet[p.teaching_leader_id] || new Set()).add(p.name);
-  });
-  const userProjStr = (uid) => userProjSet[uid] ? [...userProjSet[uid]].sort().join(", ") : "";
-  // Sort recips: theo dự án → role → tên; không có dự án xuống cuối
-  const recips = (a.recipient_ids || []).map((id) => userById[id]).filter(Boolean).sort((x, y) => {
-    const px = userProjStr(x.id), py = userProjStr(y.id);
-    if (!px && py) return 1;
-    if (px && !py) return -1;
-    if (px !== py) return px.localeCompare(py, "vi");
-    if ((x.role || "") !== (y.role || "")) return (x.role || "").localeCompare(y.role || "");
-    return (x.full_name || "").localeCompare(y.full_name || "", "vi");
-  });
-  // Màu badge cho mỗi dự án (hash tên → palette)
-  const projColors = ["#dbeafe", "#fef3c7", "#dcfce7", "#fce7f3", "#e0e7ff", "#fed7aa", "#d1fae5", "#fee2e2", "#ede9fe", "#cffafe"];
-  const projColor = (name) => {
-    let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffffff;
-    return projColors[Math.abs(h) % projColors.length];
-  };
-  const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
-  const typeLbl = a.type === "schedule_signup" ? "Đã đăng ký" : "Đã đọc";
-  let detailBody;
-  if (a.type === "schedule_signup" && a.config) {
-    const shifts = a.config.shifts || [];
-    const days = (a.config.days || []).slice().sort();
-    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
-    // bảng tổng hợp: hàng = user, cột = (day × shift)
-    const headerCells = days.map((d) => shifts.map((_, si) => `<th>${dayLbl(d)}<br><span class="meta" style="font-weight:normal">${esc(shifts[si].label)}</span></th>`).join("")).join("");
-    const bodyRows = recips.map((u) => {
-      const r = respByUser[u.id];
-      const sel = new Set();
-      if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
-      const cells = days.map((d) => shifts.map((_, si) => `<td style="text-align:center;${sel.has(`${d}-${si}`) ? "background:#dcfce7;color:#15803d;font-weight:700" : ""}">${sel.has(`${d}-${si}`) ? "✓" : ""}</td>`).join("")).join("");
-      const projStr = userProjStr(u.id);
-      const projCell = projStr
-        ? [...userProjSet[u.id]].sort().map((p) => `<span class="badge" style="background:${projColor(p)};color:#1f2937;font-size:11px;margin-right:3px">${esc(p)}</span>`).join("")
-        : '<span class="meta">—</span>';
-      return `<tr><td style="white-space:nowrap">${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span></td><td style="max-width:200px">${projCell}</td>${cells}<td style="text-align:right"><b>${sel.size}</b></td></tr>`;
-    }).join("");
-    // Tổng theo slot
-    const totals = {};
-    (resps || []).forEach((r) => { if (Array.isArray(r.response)) r.response.forEach((x) => { const k = `${x.day}-${x.shift}`; totals[k] = (totals[k] || 0) + 1; }); });
-    const totalCells = days.map((d) => shifts.map((_, si) => {
-      const n = totals[`${d}-${si}`] || 0;
-      return `<td style="text-align:center;background:#f6f8fc"><b style="color:${n > 0 ? "var(--green)" : "var(--muted)"}">${n}</b></td>`;
-    }).join("")).join("");
-    detailBody = `
-      ${a.content ? `<p style="white-space:pre-wrap;margin:0 0 10px">${esc(a.content)}</p>` : ""}
-      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
-      ${a.deadline ? `<p class="meta">⏰ Hạn chót: <b>${fmtDT(a.deadline)}</b></p>` : ""}
-      <div class="row" style="gap:8px;margin:10px 0 6px;flex-wrap:wrap">
-        <button class="btn success sm" id="ann-schedule">🤖 Xếp lịch tự động</button>
-        <button class="btn secondary sm" id="ann-csv">⬇ Xuất CSV kết quả</button>
-        <button class="btn ghost sm" id="ann-edit">Sửa</button>
-        <button class="btn danger sm" id="ann-del">Xoá</button>
-      </div>
-      <div id="ann-schedule-result"></div>
-      <p class="meta" style="margin:0 0 4px">💡 Các TG cùng dự án đã được nhóm sát nhau (sort theo tên dự án) để dễ xếp lịch chung.</p>
-      <div class="table-wrap"><table style="min-width:100%">
-        <thead>
-          <tr><th rowspan="2" style="white-space:nowrap">Người nhận</th><th rowspan="2">Dự án</th>${days.map((d) => `<th colspan="${shifts.length}" style="text-align:center;background:#f6f8fc">${dayLbl(d)}</th>`).join("")}<th rowspan="2">Tổng</th></tr>
-          <tr>${headerCells}</tr>
-        </thead>
-        <tbody>${bodyRows || `<tr><td colspan="${days.length * shifts.length + 3}" class="empty">Không có người nhận.</td></tr>`}
-          <tr style="background:#eef1f6;font-weight:600"><td colspan="2">Tổng người đăng ký</td>${totalCells}<td></td></tr>
-        </tbody></table></div>
-      <p class="meta" style="margin-top:8px">Đã đăng ký: <b>${(resps || []).filter((r) => r.responded_at).length}/${recips.length}</b> người</p>`;
-  } else {
-    // Text đơn thuần
-    const readList = recips.map((u) => {
-      const r = respByUser[u.id];
-      return `<li>${esc(u.full_name || "?")} <span class="meta">${esc(u.role || "")}</span> — ${r && r.read_at ? `<span class="badge green">✓ Đã đọc ${fmtDT(r.read_at)}</span>` : '<span class="badge gray">Chưa đọc</span>'}</li>`;
-    }).join("");
-    detailBody = `
-      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn chót: <b>${fmtDT(a.deadline)}</b></span>` : ""}
-      ${a.content ? `<p style="white-space:pre-wrap;margin:10px 0">${esc(a.content)}</p>` : ""}
-      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
-      <div class="row" style="gap:8px;margin:10px 0 6px">
-        <button class="btn ghost sm" id="ann-edit">Sửa</button>
-        <button class="btn danger sm" id="ann-del">Xoá</button>
-      </div>
-      <h4 style="margin:12px 0 4px">${typeLbl}</h4>
-      <ul style="margin:0;padding-left:18px">${readList || '<li class="meta">Không có người nhận</li>'}</ul>`;
-  }
-  body.innerHTML = detailBody;
-  const btnCsv = document.getElementById("ann-csv");
-  if (btnCsv) btnCsv.onclick = () => {
-    const shifts = a.config.shifts || [];
-    const days = (a.config.days || []).slice().sort();
-    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
-    const header = ["Dự án", "Họ tên", "Role", "Email"];
-    days.forEach((d) => shifts.forEach((s) => header.push(`${dayLbl(d)} ${s.label} (${s.start}-${s.end})`)));
-    header.push("Tổng slot");
-    const rows = [header];
-    recips.forEach((u) => {
-      const r = respByUser[u.id];
-      const sel = new Set();
-      if (r && Array.isArray(r.response)) r.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
-      const row = [userProjStr(u.id), u.full_name || "", u.role || "", u.email || ""];
-      days.forEach((d) => shifts.forEach((_, si) => row.push(sel.has(`${d}-${si}`) ? "X" : "")));
-      row.push(sel.size);
-      rows.push(row);
-    });
-    downloadCSV(`dang-ky-lich-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`, rows);
-  };
-  // === Xếp lịch tự động ===
-  const btnSched = document.getElementById("ann-schedule");
-  if (btnSched) {
-    btnSched.onclick = async () => {
-      const resBox = document.getElementById("ann-schedule-result");
-      resBox.innerHTML = `<div class="card" style="background:#f6f8fc;margin:10px 0">
-        <b>🤖 Xếp lịch tự động</b>
-        <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:8px">
-          <div class="field" style="max-width:160px;margin:0"><label>Ngày bắt đầu dạy</label><input id="sch-start" type="date" value="${new Date().toISOString().slice(0,10)}"/></div>
-          <div class="field" style="max-width:160px;margin:0"><label>Ngày kết thúc</label><input id="sch-end" type="date" value="${new Date(Date.now() + 60*86400000).toISOString().slice(0,10)}"/></div>
-          <div class="field" style="max-width:120px;margin:0"><label>Số buổi/dự án</label><input id="sch-per" type="number" value="2" min="1" max="7"/></div>
-          <button class="btn" id="sch-run">▶ Chạy xếp lịch</button>
-        </div>
-        <div id="sch-out"></div>
-      </div>`;
-      document.getElementById("sch-run").onclick = () => runAutoSchedule(a, allUsers, respByUser, userProjSet, projMap => projMap);
-    };
-  }
-  document.getElementById("ann-edit").onclick = () => { closeModal(); openBizAnnouncementModal(a, allUsers); };
-  document.getElementById("ann-del").onclick = async () => {
-    if (!confirm(`Xoá thông báo "${a.title}"? Sẽ xoá luôn các phản hồi của user.`)) return;
-    const { error } = await sb.from("biz_announcements").delete().eq("id", a.id);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã xoá", "ok"); closeModal(); bizNotify();
-  };
-}
-
-/* === Thuật toán xếp lịch tự động === */
-async function runAutoSchedule(a, allUsers, respByUser, userProjSet) {
-  const outBox = document.getElementById("sch-out");
-  outBox.innerHTML = loadingHTML();
-  const startDate = document.getElementById("sch-start").value;
-  const endDate = document.getElementById("sch-end").value;
-  const perProject = Math.max(1, Math.min(7, Number(document.getElementById("sch-per").value) || 2));
-  if (!startDate || !endDate || endDate < startDate) {
-    outBox.innerHTML = `<p class="meta" style="color:var(--red);margin-top:8px">⚠ Chọn ngày bắt đầu và ngày kết thúc hợp lệ.</p>`;
-    return;
-  }
-
-  const shifts = a.config.shifts || [];
-  const days = (a.config.days || []).slice().sort();
-  const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
-
-  // Lấy project members (TG) + biz_projects.teaching_leader_id (Leader dạy do admin phân công)
-  const [{ data: members }, { data: projects }] = await Promise.all([
-    sb.from("biz_project_members").select("project_id,profile_id"),
-    sb.from("biz_projects").select("id,name,completed_at,teaching_leader_id"),
-  ]);
-  const userById = {}; (allUsers || []).forEach((u) => userById[u.id] = u);
-  const projMap = {}; (projects || []).forEach((p) => projMap[p.id] = p);
-  // {projectId: {leader: [uids], tg: [uids]}}  — leader lấy từ teaching_leader_id (chỉ 1 người)
-  const projMembers = {};
-  (projects || []).forEach((p) => {
-    projMembers[p.id] = { leader: [], tg: [] };
-    if (p.teaching_leader_id && userById[p.teaching_leader_id] && userById[p.teaching_leader_id].role === "leader") {
-      projMembers[p.id].leader.push(p.teaching_leader_id);
-    }
-  });
-  // TG lấy từ biz_project_members (role=tg)
-  (members || []).forEach((m) => {
-    const u = userById[m.profile_id];
-    if (!u || u.role !== "tg") return;
-    if (!projMembers[m.project_id]) projMembers[m.project_id] = { leader: [], tg: [] };
-    if (!projMembers[m.project_id].tg.includes(m.profile_id)) projMembers[m.project_id].tg.push(m.profile_id);
-  });
-
-  // Lịch rảnh của mỗi user: Set<"day-shift">
-  const userSlots = {};
-  (allUsers || []).forEach((u) => {
-    const r = respByUser[u.id];
-    const set = new Set();
-    if (r && Array.isArray(r.response)) r.response.forEach((x) => set.add(`${x.day}-${x.shift}`));
-    userSlots[u.id] = set;
-  });
-
-  // Dự án LIÊN QUAN = có Leader dạy hoặc TG nằm trong danh sách nhận TB (không quan tâm completed_at vì "hoàn thành" là xong SP+thanh toán, không liên quan dạy học)
-  const recipSet = new Set(a.recipient_ids || []);
-  const totalAll = (projects || []).length;
-  const relevantProjects = (projects || []).filter((p) => {
-    const m = projMembers[p.id] || { leader: [], tg: [] };
-    const hasLeaderIn = m.leader.some((uid) => recipSet.has(uid));
-    const hasTgIn = m.tg.some((uid) => recipSet.has(uid));
-    return hasLeaderIn || hasTgIn;
-  });
-  const notRelevant = totalAll - relevantProjects.length;
-
-  // Danh sách tất cả Leader (để đề xuất đổi người dạy)
-  const allLeaders = (allUsers || []).filter((u) => u.role === "leader").map((u) => u.id);
-
-  // Giao điểm nhiều set
-  const intersect = (sets) => {
-    if (!sets.length) return new Set();
-    const [first, ...rest] = sets;
-    return new Set([...first].filter((s) => rest.every((x) => x.has(s))));
-  };
-
-  // Thuật toán greedy
-  const leaderUsedSlots = {}; // {leaderId: Set<slot>}
-  const assignments = []; // {project, leader, slot, status, note, altLeaders, candidates, tgCommon}
-  // Sort dự án theo "khó" (ít candidates nhất xếp trước) để tránh bế tắc
-  const scored = relevantProjects.map((p) => {
-    const m = projMembers[p.id] || { leader: [], tg: [] };
-    const leader = m.leader[0] || null; // teaching_leader_id (có thể null)
-    const tgSets = m.tg.filter((uid) => recipSet.has(uid)).map((uid) => userSlots[uid] || new Set());
-    const tgCommon = intersect(tgSets);
-    const leaderSlots = leader ? (userSlots[leader] || new Set()) : new Set();
-    const candidates = leader ? [...tgCommon].filter((s) => leaderSlots.has(s)) : [];
-    return { p, m, leader, tgSets, tgCommon, candidates };
-  });
-  scored.sort((a, b) => {
-    // Ưu tiên 1: dự án có TG chung (xếp OK đủ cả nhóm) trước dự án phải fallback TG đại diện
-    const aHasCommon = a.tgCommon.size > 0 ? 0 : 1;
-    const bHasCommon = b.tgCommon.size > 0 ? 0 : 1;
-    if (aHasCommon !== bHasCommon) return aHasCommon - bHasCommon;
-    // Ưu tiên 2: ít candidates nhất trước (tránh bế tắc)
-    return a.candidates.length - b.candidates.length;
-  });
-
-  scored.forEach(({ p, m, leader, tgSets, tgCommon, candidates }) => {
-    // Case 0a: Dự án chưa phân Leader dạy
-    if (!leader) {
-      assignments.push({ p, status: "no_leader", note: `Dự án chưa phân Leader dạy — vào tab Dự án, bấm "Sửa" để chọn Leader đứng lớp.` });
-      return;
-    }
-    // Case 0b: Dự án không có TG (hoặc TG không trong recipients)
-    if (!m.tg.length) {
-      assignments.push({ p, leader, status: "no_tg", note: "Dự án chưa có TG." });
-      return;
-    }
-    if (!tgSets.length) {
-      assignments.push({ p, leader, status: "no_recip", note: "TG của dự án không nằm trong danh sách nhận thông báo." });
-      return;
-    }
-    const leaderName = (userById[leader] || {}).full_name || "?";
-    const leaderSlots = userSlots[leader] || new Set();
-
-    // Case 1: Leader chưa đăng ký lịch
-    if (!leaderSlots.size) {
-      assignments.push({ p, leader, status: "leader_no_signup", note: `Leader ${leaderName} chưa đăng ký lịch rảnh (có thể do leader không được admin chọn trong danh sách nhận TB).` });
-      return;
-    }
-    // Case 2: TG không có buổi chung → fallback "TG đại diện"
-    if (!tgCommon.size) {
-      // Union tất cả slot của các TG → slot có ít nhất 1 TG rảnh
-      const tgUnion = new Set();
-      tgSets.forEach((s) => s.forEach((x) => tgUnion.add(x)));
-      // Giao với lịch Leader + loại slot Leader đã dùng cho dự án khác
-      const used = leaderUsedSlots[leader] || new Set();
-      const tgsRelevant = m.tg.filter((uid) => recipSet.has(uid));
-      // Ưu tiên slot có NHIỀU TG rảnh nhất (càng nhiều TG đi học càng tốt)
-      const altScored = [...tgUnion].filter((s) => leaderSlots.has(s) && !used.has(s)).map((s) => {
-        const presentCount = tgsRelevant.filter((uid) => (userSlots[uid] || new Set()).has(s)).length;
-        return { s, presentCount };
-      }).sort((a, b) => b.presentCount - a.presentCount);
-      if (altScored.length) {
-        const chosen = altScored[0].s;
-        (leaderUsedSlots[leader] = leaderUsedSlots[leader] || new Set()).add(chosen);
-        const presentTgs = tgsRelevant.filter((uid) => (userSlots[uid] || new Set()).has(chosen));
-        const absentTgs = tgsRelevant.filter((uid) => !(userSlots[uid] || new Set()).has(chosen));
-        const presentNames = presentTgs.map((uid) => (userById[uid] || {}).full_name || "?");
-        const absentNames = absentTgs.map((uid) => (userById[uid] || {}).full_name || "?");
-        assignments.push({
-          p, leader, status: "ok_rep", slot: chosen, slots: [chosen],
-          note: `TG không có buổi chung → xếp theo TG đại diện: <b style="color:var(--green)">${presentNames.join(", ")}</b> đi học trực tiếp. <b style="color:var(--amber)">${absentNames.join(", ")}</b> không rảnh — <b>xem video sau</b>.`,
-        });
-        return;
-      }
-      // Không có slot nào Leader khớp dù chỉ 1 TG → full video
-      assignments.push({ p, leader, status: "video_tg", note: `Các TG không có buổi chung + Leader cũng không khớp lịch TG nào — gợi ý <b>học qua video</b> hoàn toàn.` });
-      return;
-    }
-    // Case 3: Leader không khớp TG
-    if (!candidates.length) {
-      // Tìm Leader khác khớp với tgCommon
-      const altLeaders = allLeaders.filter((g) => g !== leader && [...tgCommon].some((s) => (userSlots[g] || new Set()).has(s)));
-      const altNames = altLeaders.map((g) => (userById[g] || {}).full_name || "?");
-      assignments.push({
-        p, leader, status: "leader_mismatch",
-        tgCommon,
-        altLeaders: altNames,
-        note: `Leader ${leaderName} không có buổi khớp với TG. Gợi ý <b>học qua video</b>${altNames.length ? ` hoặc đổi sang Leader khác: <b>${altNames.join(", ")}</b>` : ""}.`,
-      });
-      return;
-    }
-    // Case 4: Có candidates, loại slot Leader đã dùng cho dự án khác
-    const used = leaderUsedSlots[leader] || new Set();
-    const free = candidates.filter((s) => !used.has(s));
-    if (!free.length) {
-      const altLeaders = allLeaders.filter((g) => g !== leader && [...tgCommon].some((s) => (userSlots[g] || new Set()).has(s) && !(leaderUsedSlots[g] || new Set()).has(s)));
-      const altNames = altLeaders.map((g) => (userById[g] || {}).full_name || "?");
-      assignments.push({
-        p, leader, status: "leader_slot_conflict", tgCommon,
-        altLeaders: altNames,
-        note: `Leader ${leaderName} đã dùng hết slot khớp cho dự án khác. Gợi ý <b>học qua video</b>${altNames.length ? ` hoặc chuyển sang Leader: <b>${altNames.join(", ")}</b>` : ""}.`,
-      });
-      return;
-    }
-    // OK: chọn 1 slot cố định (1 ca × 1 ngày trong tuần). Dự án học slot này LẶP qua các tuần → đủ perProject buổi.
-    const chosen = free[0];
-    (leaderUsedSlots[leader] = leaderUsedSlots[leader] || new Set()).add(chosen);
-    assignments.push({ p, leader, status: "ok", slot: chosen, slots: [chosen] });
-  });
-
-  // Sort kết quả: OK trước, warning sau
-  const prio = { ok: 0, ok_rep: 1, video_tg: 2, leader_mismatch: 3, leader_slot_conflict: 4, leader_no_signup: 5, no_leader: 6, no_tg: 7, no_recip: 8 };
-  assignments.sort((a, b) => (prio[a.status] || 9) - (prio[b.status] || 9));
-
-  // Render UI
-  const slotLabel = (sKey) => {
-    const [d, si] = sKey.split("-").map(Number);
-    const sh = shifts[si] || {};
-    return `${dayLbl(d)} · ${sh.label || "?"} (${sh.start || ""}–${sh.end || ""})`;
-  };
-  const statusBadge = (st) => ({
-    ok: '<span class="badge green">✓ Xếp OK</span>',
-    ok_rep: '<span class="badge" style="background:#dcfce7;color:#15803d">🎥 TG đại diện</span>',
-    video_tg: '<span class="badge amber">📹 Học video</span>',
-    leader_mismatch: '<span class="badge amber">⚠ Leader không khớp</span>',
-    leader_slot_conflict: '<span class="badge amber">⚠ Leader hết slot</span>',
-    leader_no_signup: '<span class="badge red">Leader chưa đăng ký</span>',
-    no_leader: '<span class="badge red">Chưa có Leader</span>',
-    no_tg: '<span class="badge gray">Chưa có TG</span>',
-    no_recip: '<span class="badge gray">TG không nhận TB</span>',
-  }[st] || `<span class="badge gray">${st}</span>`);
-
-  const rowsHTML = assignments.map((x, i) => {
-    const leaderName = x.leader ? ((userById[x.leader] || {}).full_name || "?") : "—";
-    const slotsHTML = x.slot
-      ? `<div><b style="color:var(--green)">${slotLabel(x.slot)}</b></div><div class="meta" style="margin-top:3px">× <b>${perProject}</b> buổi (${perProject} tuần liên tiếp)</div>`
-      : (x.tgCommon && x.tgCommon.size ? `<span class="meta">TG rảnh chung: ${[...x.tgCommon].map(slotLabel).join("; ")}</span>` : '<span class="meta">—</span>');
-    return `<tr>
-      <td>${i + 1}</td>
-      <td><b>${esc(x.p.name)}</b></td>
-      <td>${esc(leaderName)}</td>
-      <td>${statusBadge(x.status)}</td>
-      <td>${slotsHTML}</td>
-      <td class="meta">${x.note || ""}</td>
-    </tr>`;
-  }).join("");
-
-  const nOk = assignments.filter((x) => x.status === "ok").length;
-  const nRep = assignments.filter((x) => x.status === "ok_rep").length;
-  const nTotal = assignments.length;
-  if (nTotal === 0) {
-    outBox.innerHTML = `<div class="empty" style="margin-top:10px"><div class="em">🤷</div><p>Không có dự án nào liên quan đến thông báo này.</p><p class="meta">Dự án được đưa vào xếp lịch khi có ít nhất 1 Leader dạy hoặc TG của dự án đó nằm trong danh sách người nhận thông báo. Sửa thông báo và thêm họ vào, hoặc tạo thông báo mới.</p></div>`;
-    return;
-  }
-  outBox.innerHTML = `
-    <p style="margin:10px 0 6px"><b>Kết quả:</b> ${nOk + nRep}/${nTotal} dự án xếp được slot (mỗi dự án học <b>${perProject} buổi</b>, lặp theo tuần)${nRep > 0 ? `, trong đó <b style="color:#15803d">${nRep} dự án xếp theo TG đại diện</b> (TG kia xem video)` : ""}. ${nTotal - nOk - nRep > 0 ? `<span style="color:var(--amber)">${nTotal - nOk - nRep} dự án cần xử lý thủ công.</span>` : ""}</p>
-    <p class="meta" style="margin:0 0 6px">
-      Phạm vi lọc: <b>${totalAll}</b> dự án hệ thống${notRelevant > 0 ? ` − <b>${notRelevant}</b> không có Leader dạy/TG trong người nhận TB` : ""} =
-      <b style="color:var(--blue-d)">${nTotal}</b> dự án đưa vào xếp.
-      <br>Admin muốn xếp cho dự án nào thì chọn Leader dạy + TG của dự án đó khi tạo thông báo.
-    </p>
-    <div class="table-wrap"><table>
-      <thead><tr><th>#</th><th>Dự án</th><th>Leader (người dạy)</th><th>Trạng thái</th><th>Slot gợi ý</th><th>Ghi chú</th></tr></thead>
-      <tbody>${rowsHTML || '<tr><td colspan="6" class="empty">Không có dự án nào.</td></tr>'}</tbody>
-    </table></div>
-    <div class="row" style="gap:8px;margin-top:8px">
-      <button class="btn secondary sm" id="sch-csv">⬇ Xuất lịch học CSV (bao gồm ngày cụ thể)</button>
-    </div>`;
-
-  // Export CSV với ngày cụ thể
-  document.getElementById("sch-csv").onclick = () => {
-    // Tạo list ngày học thực cho mỗi assignment OK, lặp theo weekday từ startDate đến endDate
-    const rows = [["Dự án", "Leader (người dạy)", "Ngày học", "Thứ", "Ca", "Giờ bắt đầu", "Giờ kết thúc", "TG tham gia", "Buổi", "Ghi chú"]];
-    const startD = new Date(startDate + "T00:00:00");
-    const endD = new Date(endDate + "T23:59:59");
-    assignments.forEach((x) => {
-      const leaderName = x.leader ? (userById[x.leader] || {}).full_name || "" : "";
-      const m = projMembers[x.p.id] || { tg: [] };
-      const tgNames = m.tg.map((uid) => (userById[uid] || {}).full_name || "?").join(", ");
-      const noteClean = (x.note || "").replace(/<[^>]+>/g, "");
-      if (x.status !== "ok" && x.status !== "ok_rep") {
-        rows.push([x.p.name, leaderName, "", "", "", "", "", "", noteClean, ""]);
-        return;
-      }
-      // Nếu TG đại diện: ghi chú thêm vào mỗi dòng để Admin biết ai học trực tiếp, ai xem video
-      const repNote = x.status === "ok_rep" ? noteClean : "";
-      // 1 slot cố định, lặp qua N tuần (N = perProject)
-      const [day, si] = x.slot.split("-").map(Number);
-      const sh = shifts[si] || {};
-      const jsWeekday = day === 8 ? 0 : day - 1;
-      const d = new Date(startD);
-      while (d.getDay() !== jsWeekday && d <= endD) d.setDate(d.getDate() + 1);
-      let bNum = 1;
-      while (d <= endD && bNum <= perProject) {
-        rows.push([
-          x.p.name, leaderName,
-          d.toLocaleDateString("vi-VN"),
-          dayLbl(day),
-          sh.label || "",
-          sh.start || "",
-          sh.end || "",
-          tgNames,
-          `Buổi ${bNum}/${perProject}`,
-          repNote,
-        ]);
-        d.setDate(d.getDate() + 7);
-        bNum++;
-      }
-      // Nếu endDate không đủ chứa đủ perProject buổi → ghi 1 dòng cảnh báo
-      if (bNum <= perProject) {
-        rows.push([x.p.name, leaderName, "", "", "", "", "", "", `⚠ Chỉ xếp được ${bNum - 1}/${perProject} buổi — endDate không đủ`, ""]);
-      }
-    });
-    const fname = `lich-day-${a.title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.csv`;
-    downloadCSV(fname, rows);
-  };
-}
-
-/* === Trang Thông báo cho User (Leader/GVHD/TG) === */
-async function userNotifications() {
-  const me = state.profile.id;
-  setContent(`<div class="section-title"><h2>🔔 Thông báo</h2></div><div id="un-body">${loadingHTML()}</div>`);
-  const [{ data: anns, error }, { data: resps }] = await Promise.all([
-    sb.from("biz_announcements").select("*").contains("recipient_ids", [me]).order("created_at", { ascending: false }),
-    sb.from("biz_announcement_responses").select("*").eq("user_id", me),
-  ]);
-  if (error) { document.getElementById("un-body").innerHTML = `<div class="empty">Lỗi: ${esc(error.message)}</div>`; return; }
-  const respByAnn = {}; (resps || []).forEach((r) => respByAnn[r.announcement_id] = r);
-  const list = anns || [];
-  if (!list.length) { document.getElementById("un-body").innerHTML = `<div class="empty"><div class="em">📭</div><p>Chưa có thông báo nào gửi cho bạn.</p></div>`; return; }
-  const annMap = {}; list.forEach((a) => annMap[a.id] = a);
-  const rows = list.map((a) => {
-    const r = respByAnn[a.id];
-    const typeBadge = a.type === "schedule_signup"
-      ? '<span class="badge amber">📅 Đăng ký lịch</span>'
-      : '<span class="badge blue">💬 Thông báo</span>';
-    const status = a.type === "schedule_signup"
-      ? (r && r.responded_at ? '<span class="badge green">✓ Đã đăng ký</span>' : '<span class="badge red">⚠ Chưa đăng ký</span>')
-      : (r && r.read_at ? '<span class="badge green">✓ Đã đọc</span>' : '<span class="badge amber">● Chưa đọc</span>');
-    const deadlineInfo = a.deadline ? ` · HSD: <b style="color:${new Date(a.deadline) < new Date() ? "var(--red)" : "var(--amber)"}">${fmtDT(a.deadline)}</b>` : "";
-    const borderStyle = (a.type === "schedule_signup" && !(r && r.responded_at)) || (a.type === "text" && !(r && r.read_at))
-      ? "border:2px solid var(--amber)" : "";
-    return `<div class="card" style="cursor:pointer;${borderStyle}" data-unopen="${a.id}">
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline">
-        <div style="font-weight:700">${esc(a.title)} ${typeBadge}</div>
-        <span>${status}</span>
-      </div>
-      <div class="meta" style="margin-top:4px">${fmtDT(a.created_at)}${deadlineInfo}</div>
-      ${a.content ? `<div style="margin-top:6px;color:var(--ink-2);white-space:pre-wrap">${esc(a.content).slice(0, 160)}${a.content.length > 160 ? "..." : ""}</div>` : ""}
-    </div>`;
-  }).join("");
-  document.getElementById("un-body").innerHTML = rows;
-  on("[data-unopen]", "click", (e) => viewBizAnnouncementUser(annMap[e.currentTarget.dataset.unopen], respByAnn[e.currentTarget.dataset.unopen]));
-}
-
-async function viewBizAnnouncementUser(a, existingResp) {
-  if (!a) return;
-  const me = state.profile.id;
-  const typeBadge = a.type === "schedule_signup" ? '<span class="badge amber">📅 Đăng ký lịch</span>' : '<span class="badge blue">💬 Thông báo</span>';
-  let bodyHTML;
-  if (a.type === "schedule_signup" && a.config) {
-    const shifts = a.config.shifts || [];
-    const days = (a.config.days || []).slice().sort();
-    const dayLbl = (d) => (WEEKDAYS.find((w) => w.v === d) || { s: "?" }).s;
-    const sel = new Set();
-    if (existingResp && Array.isArray(existingResp.response)) existingResp.response.forEach((x) => sel.add(`${x.day}-${x.shift}`));
-    const headerCells = shifts.map((s) => `<th>${esc(s.label)}<br><span class="meta" style="font-weight:normal">${s.start}–${s.end}</span></th>`).join("");
-    const bodyRows = days.map((d) => {
-      const cells = shifts.map((_, si) => `<td style="text-align:center;padding:4px"><label style="display:block;cursor:pointer;padding:8px;border-radius:6px;${sel.has(`${d}-${si}`) ? "background:#dcfce7" : ""}"><input type="checkbox" class="un-slot" data-day="${d}" data-shift="${si}" ${sel.has(`${d}-${si}`) ? "checked" : ""} style="transform:scale(1.3)"/></label></td>`).join("");
-      return `<tr><td style="white-space:nowrap;font-weight:600">${dayLbl(d)}</td>${cells}</tr>`;
-    }).join("");
-    bodyHTML = `
-      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn: <b>${fmtDT(a.deadline)}</b></span>` : ""}
-      ${a.content ? `<p style="white-space:pre-wrap;margin:10px 0">${esc(a.content)}</p>` : ""}
-      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}
-      <p class="meta" style="margin:10px 0 4px">Tick vào các ô bạn <b>rảnh</b>, có thể học được:</p>
-      <div class="table-wrap"><table><thead><tr><th>Ngày</th>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>
-      ${existingResp && existingResp.responded_at ? `<p class="meta" style="margin-top:6px">Đã lưu lần cuối: ${fmtDT(existingResp.responded_at)}. Bạn có thể sửa và lưu lại.</p>` : ""}`;
-  } else {
-    bodyHTML = `
-      ${typeBadge} ${a.deadline ? `<span class="meta">· ⏰ Hạn: <b>${fmtDT(a.deadline)}</b></span>` : ""}
-      <h3 style="margin:10px 0 6px">${esc(a.title)}</h3>
-      ${a.content ? `<p style="white-space:pre-wrap">${esc(a.content)}</p>` : ""}
-      ${a.link_url ? `<p>🔗 <a href="${esc(a.link_url)}" target="_blank" rel="noopener">${esc(a.link_url)}</a></p>` : ""}`;
-  }
-  const saveBtn = a.type === "schedule_signup" ? '<button class="btn" id="un-save">💾 Lưu đăng ký</button>' : '';
-  showModal(a.title, bodyHTML, `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>${saveBtn}`, "lg");
-  // Nếu là text, tự động mark as read
-  if (a.type === "text" && !(existingResp && existingResp.read_at)) {
-    await sb.from("biz_announcement_responses").upsert({
-      announcement_id: a.id, user_id: me, read_at: new Date().toISOString()
-    }, { onConflict: "announcement_id,user_id" });
-  }
-  const btn = document.getElementById("un-save");
-  if (btn) btn.onclick = async (e) => {
-    const slots = [...document.querySelectorAll(".un-slot:checked")].map((c) => ({ day: Number(c.dataset.day), shift: Number(c.dataset.shift) }));
-    e.target.disabled = true;
-    const now = new Date().toISOString();
-    const { error } = await sb.from("biz_announcement_responses").upsert({
-      announcement_id: a.id, user_id: me, response: slots, responded_at: now, read_at: now
-    }, { onConflict: "announcement_id,user_id" });
-    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-    toast(`Đã lưu ${slots.length} slot`, "ok"); closeModal(); userNotifications();
-  };
 }
 
 /* ---------- Bảng giá ---------- */
@@ -2205,58 +552,19 @@ async function bizPrices() {
   const { data, error } = await sb.from("biz_price_items").select("*").order("created_at", { ascending: false });
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải bảng giá: ${esc(error.message)}</div>`; return; }
   const map = {}; (data || []).forEach((p) => map[p.id] = p);
-  const rowHTML = (p) => `<tr>
+  const rows = (data || []).map((p) => `<tr>
     <td>${esc(p.name)}${p.note ? `<div class="meta">${esc(p.note)}</div>` : ""}${p.category === "service" ? ' <span class="badge blue">Dịch vụ</span>' : ""}</td>
     <td>${esc(p.unit || "")}</td><td><b>${fmtVND(p.price)}</b></td>
     <td style="white-space:nowrap"><button class="btn ghost sm" data-ped="${p.id}">Sửa</button>
-      <button class="btn danger sm" data-pdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></td></tr>`;
-  const rows = (data || []).map(rowHTML).join("");
+      <button class="btn danger sm" data-pdel="${p.id}" data-name="${esc(p.name)}">Xoá</button></td></tr>`).join("");
   bcontent().innerHTML = `
     <div class="pill-row"><button class="btn" id="price-new">＋ Thêm mục</button>
       <button class="btn secondary" id="price-exp">⬇ Export CSV</button>
       <button class="btn secondary" id="price-imp">⬆ Import CSV</button>
       <input type="file" id="price-file" accept=".csv,text/csv" style="display:none"/></div>
-    <div class="row" style="align-items:center;gap:8px;margin:6px 0 8px;flex-wrap:wrap">
-      <div style="flex:1;min-width:240px;position:relative">
-        <input id="price-search" placeholder="🔍 Tìm theo tên, ĐVT, giá, ghi chú..." style="width:100%;padding:9px 36px 9px 12px"/>
-        <button type="button" id="price-search-clear" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);display:none;padding:6px 10px;font-size:1rem">✕</button>
-      </div>
-      <span id="price-search-count" class="meta">Tổng: <b>${(data || []).length}</b> mặt hàng</span>
-    </div>
+    <p class="meta" style="margin:0 0 8px">Tổng: <b>${(data || []).length}</b> mặt hàng</p>
     <div class="table-wrap"><table><thead><tr><th>Tên</th><th>ĐVT</th><th>Đơn giá</th><th>Thao tác</th></tr></thead>
-    <tbody id="price-tbody">${rows || `<tr><td colspan="4" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
-  // === Tìm kiếm nhanh client-side ===
-  const searchEl = document.getElementById("price-search");
-  const clearBtn = document.getElementById("price-search-clear");
-  const countEl = document.getElementById("price-search-count");
-  const tbody = document.getElementById("price-tbody");
-  const total = (data || []).length;
-  const idx = (data || []).map((p) => ({
-    p,
-    hay: removeVN([
-      p.name || "", p.unit || "", p.note || "",
-      p.category === "service" ? "dịch vụ gia công service" : "linh kien linh kiện item",
-      String(p.price || ""), fmtVND(p.price || 0),
-    ].join(" ")).toLowerCase(),
-  }));
-  const doFilter = () => {
-    const q = removeVN((searchEl.value || "").trim()).toLowerCase();
-    if (!q) {
-      tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Chưa có mục nào.</td></tr>`;
-      countEl.innerHTML = `Tổng: <b>${total}</b> mặt hàng`;
-      clearBtn.style.display = "none";
-      return;
-    }
-    const terms = q.split(/\s+/).filter(Boolean);
-    const hits = idx.filter(({ hay }) => terms.every((t) => hay.includes(t))).map(({ p }) => p);
-    tbody.innerHTML = hits.length
-      ? hits.map(rowHTML).join("")
-      : `<tr><td colspan="4" class="empty">Không tìm thấy mục khớp "${esc(searchEl.value)}".</td></tr>`;
-    countEl.innerHTML = `Tìm thấy <b>${hits.length}</b>/${total} mặt hàng`;
-    clearBtn.style.display = "block";
-  };
-  searchEl.oninput = doFilter;
-  clearBtn.onclick = () => { searchEl.value = ""; doFilter(); searchEl.focus(); };
+    <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có mục nào. Bấm "Thêm mục" hoặc Import CSV.</td></tr>`}</tbody></table></div>`;
   document.getElementById("price-new").onclick = () => openPriceModal();
   document.getElementById("price-exp").onclick = () => {
     const r = [["Tên", "ĐVT", "Đơn giá", "Loại", "Ghi chú"]];
@@ -2325,28 +633,20 @@ async function bizInvoices() {
   const { data, error } = await sb.from("biz_invoices").select("*").order("updated_at", { ascending: false });
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải hoá đơn: ${esc(error.message)}</div>`; return; }
   const map = {}; (data || []).forEach((iv) => map[iv.id] = iv);
-  const rowHTML = (iv) => `<tr style="cursor:pointer" data-ivopen="${iv.id}">
+  const rows = (data || []).map((iv) => `<tr style="cursor:pointer" data-ivopen="${iv.id}">
     <td>${esc(iv.customer || "(chưa có)")}${iv.project_name ? `<div class="meta">${esc(iv.project_name)}</div>` : ""}</td>
     <td>${fmtDate(iv.invoice_date)}</td>
     <td><b>${fmtVND(iv.total)}</b></td>
     <td style="white-space:nowrap"><button class="btn ghost sm" data-ivexp="${iv.id}">Xuất</button>
       <button class="btn ghost sm" data-ived="${iv.id}">Sửa</button>
-      <button class="btn danger sm" data-ivdel="${iv.id}">Xoá</button></td></tr>`;
-  const rows = (data || []).map(rowHTML).join("");
+      <button class="btn danger sm" data-ivdel="${iv.id}">Xoá</button></td></tr>`).join("");
   bcontent().innerHTML = `
     <div class="pill-row"><button class="btn" id="inv-new">＋ Tạo hoá đơn (gốc)</button>
       <button class="btn secondary" id="inv-cust">👥 Khách quen</button>
       <button class="btn secondary" id="inv-gc">⚙ Đơn giá gia công</button>
       <button class="btn secondary" id="inv-csv">⬇ Danh sách (CSV)</button></div>
-    <div class="row" style="align-items:center;gap:8px;margin:6px 0 10px;flex-wrap:wrap">
-      <div style="flex:1;min-width:240px;position:relative">
-        <input id="inv-search" placeholder="🔍 Tìm theo khách, dự án, số tiền, ngày (dd/mm/yyyy)..." style="width:100%;padding:9px 36px 9px 12px"/>
-        <button type="button" id="inv-search-clear" style="position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--muted);display:none;padding:6px 10px;font-size:1rem">✕</button>
-      </div>
-      <span id="inv-search-count" class="meta"></span>
-    </div>
     <div class="table-wrap"><table><thead><tr><th>Khách / Dự án</th><th>Ngày</th><th>Tổng (gốc)</th><th>Thao tác</th></tr></thead>
-    <tbody id="inv-tbody">${rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn. Bấm "Tạo hoá đơn".</td></tr>`}</tbody></table></div>`;
+    <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn. Bấm "Tạo hoá đơn".</td></tr>`}</tbody></table></div>`;
   document.getElementById("inv-new").onclick = () => openInvoiceModal();
   document.getElementById("inv-cust").onclick = () => bizCustomers();
   document.getElementById("inv-gc").onclick = () => giaCongSettings();
@@ -2355,42 +655,6 @@ async function bizInvoices() {
     (data || []).forEach((iv) => r.push([iv.customer || "", iv.project_name || "", iv.invoice_date || "", iv.total]));
     downloadCSV("hoa-don.csv", r);
   };
-  // === Tìm kiếm nhanh client-side ===
-  const searchEl = document.getElementById("inv-search");
-  const clearBtn = document.getElementById("inv-search-clear");
-  const countEl = document.getElementById("inv-search-count");
-  const tbody = document.getElementById("inv-tbody");
-  // Precompute searchable text per invoice (lowercased, bỏ dấu TV)
-  const idx = (data || []).map((iv) => ({
-    iv,
-    hay: removeVN([
-      iv.customer || "",
-      iv.project_name || "",
-      String(iv.total || ""),
-      fmtVND(iv.total || 0),
-      fmtDate(iv.invoice_date || ""),
-      (iv.invoice_date || "").slice(0, 10),
-    ].join(" ")).toLowerCase(),
-  }));
-  const doFilter = () => {
-    const q = removeVN((searchEl.value || "").trim()).toLowerCase();
-    if (!q) {
-      tbody.innerHTML = rows || `<tr><td colspan="4" class="empty">Chưa có hoá đơn.</td></tr>`;
-      countEl.textContent = "";
-      clearBtn.style.display = "none";
-      return;
-    }
-    // Hỗ trợ nhiều từ khoá: tất cả phải khớp
-    const terms = q.split(/\s+/).filter(Boolean);
-    const hits = idx.filter(({ hay }) => terms.every((t) => hay.includes(t))).map(({ iv }) => iv);
-    tbody.innerHTML = hits.length
-      ? hits.map(rowHTML).join("")
-      : `<tr><td colspan="4" class="empty">Không tìm thấy hoá đơn khớp "${esc(searchEl.value)}".</td></tr>`;
-    countEl.innerHTML = `Tìm thấy <b>${hits.length}</b>/${(data || []).length} hoá đơn`;
-    clearBtn.style.display = "block";
-  };
-  searchEl.oninput = doFilter;
-  clearBtn.onclick = () => { searchEl.value = ""; doFilter(); searchEl.focus(); };
   on("[data-ivopen]", "click", (e) => { if (e.target.dataset.ived || e.target.dataset.ivdel || e.target.dataset.ivexp) return; invoiceDetail(map[e.currentTarget.dataset.ivopen]); }, bcontent());
   on("[data-ivexp]", "click", (e) => { e.stopPropagation(); exportInvoiceModal(map[e.currentTarget.dataset.ivexp]); }, bcontent());
   on("[data-ived]", "click", (e) => { e.stopPropagation(); openInvoiceModal(map[e.currentTarget.dataset.ived]); }, bcontent());
@@ -2812,66 +1076,30 @@ async function showProjectQR(p) {
 
 async function bizProjects() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates, { data: leaderProfiles }] = await Promise.all([
+  const [{ data: projects, error }, { data: invoices }, { data: expenses }, { data: incomes }] = await Promise.all([
     sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
     sb.from("biz_invoices").select("project_name,total"),
-    sb.from("biz_expenses").select("project_id,amount,paid"),
+    sb.from("biz_expenses").select("project_id,amount"),
     sb.from("biz_incomes").select("project_id,amount"),
-    sb.from("biz_attendance").select("transport,paid,status").eq("status", "approved").eq("paid", true),
-    getAttRates(),
-    sb.from("profiles").select("id,full_name").eq("role", "leader"),
   ]);
-  const leaderNameById = {}; (leaderProfiles || []).forEach((l) => leaderNameById[l.id] = l.full_name);
-  // Tổng phụ cấp đã CK cho toàn bộ leader (không gắn với dự án nào)
-  const allowancePaid = (attRows || []).reduce((s, x) =>
-    s + (x.transport === "ca_nhan" ? (rates.ca_nhan || 0) : (rates.xe_om || 0)), 0);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải dự án: ${esc(error.message)}</div>`; return; }
   const invBy = {}, invCnt = {};
   (invoices || []).forEach((iv) => { const k = (iv.project_name || "").trim(); if (k) { invBy[k] = (invBy[k] || 0) + Number(iv.total || 0); invCnt[k] = (invCnt[k] || 0) + 1; } });
-  const expPaidBy = {}, expUnpaidBy = {}, expCnt = {};
-  (expenses || []).forEach((x) => {
-    const amt = Number(x.amount || 0);
-    if (x.paid) expPaidBy[x.project_id] = (expPaidBy[x.project_id] || 0) + amt;
-    else expUnpaidBy[x.project_id] = (expUnpaidBy[x.project_id] || 0) + amt;
-    expCnt[x.project_id] = (expCnt[x.project_id] || 0) + 1;
-  });
+  const expBy = {}, expCnt = {};
+  (expenses || []).forEach((x) => { expBy[x.project_id] = (expBy[x.project_id] || 0) + Number(x.amount || 0); expCnt[x.project_id] = (expCnt[x.project_id] || 0) + 1; });
   const thuBy = {};
   (incomes || []).forEach((x) => { thuBy[x.project_id] = (thuBy[x.project_id] || 0) + Number(x.amount || 0); });
-
-  // Filter theo trạng thái hoàn thành. Mặc định "active" (đang chạy) để tránh rối.
-  const pjFilter = state.params.pj_filter || "active";
-  const allProjects = projects || [];
-  const nActive = allProjects.filter((p) => !p.completed_at).length;
-  const nDone   = allProjects.filter((p) =>  p.completed_at).length;
-  const shown = allProjects.filter((p) =>
-    pjFilter === "done" ? !!p.completed_at
-    : pjFilter === "all"  ? true
-    : !p.completed_at
-  );
-
   let tQuote = 0, tThu = 0, tChi = 0;
   const pmap = {};
-  const cards = shown.map((p) => {
+  const cards = (projects || []).map((p) => {
     pmap[p.id] = p;
     const thu = thuBy[p.id] || 0;
-    const chiDa = (invBy[(p.name || "").trim()] || 0) + (expPaidBy[p.id] || 0);
-    const chiNo = expUnpaidBy[p.id] || 0;
-    const ln = thu - chiDa;
-    tQuote += Number(p.quote || 0); tThu += thu; tChi += chiDa;
-    // Điều kiện hoàn thành: LN >= 0 (hoà vốn hoặc có lãi) VÀ đã CK hết cho NV (chiNo = 0)
-    const canComplete = ln >= 0 && chiNo === 0;
-    const blockReason = !canComplete
-      ? (ln < 0 ? `Đang lỗ ${fmtVND(-ln)} — cần thu thêm hoặc giảm chi.`
-                : `Còn ${fmtVND(chiNo)} chưa CK cho nhân viên.`)
-      : "";
-    const isDone = !!p.completed_at;
-    const teacherName = p.teaching_leader_id ? leaderNameById[p.teaching_leader_id] : null;
-    return `<div class="card" ${isDone ? 'style="opacity:.72"' : ""}>
-        <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline;flex-wrap:wrap">
-          <div style="font-weight:700">${esc(p.name)}${teacherName ? ` <span class="badge blue" style="font-weight:500">👨‍🏫 ${esc(teacherName)}</span>` : (isDone ? '' : ' <span class="badge gray" style="font-weight:500">chưa phân Leader dạy</span>')}</div>
-          ${isDone ? `<span class="badge green">✅ Đã hoàn thành · ${fmtDate(p.completed_at)}</span>` : ""}
-        </div>
-        <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b>${chiNo > 0 ? ` · Còn nợ NV: <b style="color:var(--amber)">${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
+    const chi = (invBy[(p.name || "").trim()] || 0) + (expBy[p.id] || 0);
+    const ln = thu - chi;
+    tQuote += Number(p.quote || 0); tThu += thu; tChi += chi;
+    return `<div class="card">
+        <div style="font-weight:700">${esc(p.name)}</div>
+        <div class="meta" style="margin-top:6px">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
         <div class="meta">${invCnt[(p.name || "").trim()] || 0} hoá đơn · ${expCnt[p.id] || 0} khoản chi NV</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:space-between;align-items:center;margin-top:10px">
           <span class="meta" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.note ? "📝 " + esc(p.note) : ""}</span>
@@ -2879,66 +1107,23 @@ async function bizProjects() {
           <button class="btn ghost sm" data-pjqr="${p.id}">💰 QR thu</button>
           <button class="btn ghost sm" data-pjdet="${p.id}">Chi tiết</button>
           <button class="btn sm" data-pjexp="${p.id}">Xuất HĐ</button>
-          ${isDone
-            ? `<button class="btn ghost sm" data-pjreopen="${p.id}" data-name="${esc(p.name)}">↺ Tiếp tục</button>`
-            : `<button class="btn success sm" data-pjdone="${p.id}" data-name="${esc(p.name)}" data-ln="${ln}" data-chino="${chiNo}"${canComplete ? "" : ` disabled title="${esc(blockReason)}"`}>✅ Hoàn thành</button>`}
           <button class="btn ghost sm" data-pjed="${p.id}">Sửa</button>
           <button class="btn danger sm" data-pjdel="${p.id}" data-name="${esc(p.name)}">Xoá</button>
           </div>
         </div></div>`;
   }).join("");
-  const stat = (label, val, color, hint) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}${hint ? ` <span class="meta" title="${esc(hint)}" style="cursor:help">ⓘ</span>` : ""}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
-  const tLN = tThu - tChi - allowancePaid;
-  const filterLabel = pjFilter === "done" ? "đã hoàn thành" : pjFilter === "all" ? "tất cả" : "đang chạy";
-  const emptyMsg = pjFilter === "active"
-    ? (nDone > 0 ? `<div class="empty"><div class="em">🎉</div><p>Không có dự án đang chạy. ${nDone} dự án đã hoàn thành — chọn "Đã hoàn thành" hoặc "Tất cả" ở bộ lọc để xem.</p></div>`
-                 : `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`)
-    : pjFilter === "done"
-      ? `<div class="empty"><div class="em">📭</div><p>Chưa có dự án nào được đánh dấu hoàn thành.</p></div>`
-      : `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`;
+  const stat = (label, val, color) => `<div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">${label}</div><div style="font-size:1.2rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div></div>`;
   bcontent().innerHTML = `
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      ${stat("Tổng báo giá", tQuote)}${stat("Tổng thu", tThu, "var(--green)")}${stat("Tổng chi", tChi, "var(--red)")}${stat("Phụ cấp đã CK", allowancePaid, "var(--red)", "Tổng phụ cấp đã chuyển khoản cho leader (từ Chấm công). Không gắn với dự án cụ thể nên chỉ trừ vào Tổng lợi nhuận.")}${stat("Tổng lợi nhuận", tLN, tLN < 0 ? "var(--red)" : "var(--green)", "= Tổng thu − Tổng chi − Phụ cấp đã CK")}
+      ${stat("Tổng báo giá", tQuote)}${stat("Tổng thu", tThu, "var(--green)")}${stat("Tổng chi", tChi, "var(--red)")}${stat("Tổng lợi nhuận", tThu - tChi, (tThu - tChi) < 0 ? "var(--red)" : "var(--green)")}
     </div>
-    <p class="meta" style="margin:0 0 6px">Đang xem <b>${filterLabel}</b> · Số liệu tổng chỉ tính các dự án đang hiển thị (riêng Phụ cấp đã CK là tổng toàn hệ thống).</p>
-    <div class="pill-row">
-      <button class="btn" id="pj-new">＋ Tạo dự án</button>
-      <button class="btn secondary" id="pj-stats">📊 Thống kê</button>
-      <select id="pj-filter" style="max-width:180px">
-        <option value="active" ${pjFilter === "active" ? "selected" : ""}>Đang chạy (${nActive})</option>
-        <option value="done" ${pjFilter === "done" ? "selected" : ""}>Đã hoàn thành (${nDone})</option>
-        <option value="all" ${pjFilter === "all" ? "selected" : ""}>Tất cả (${allProjects.length})</option>
-      </select>
-    </div>
-    ${cards || emptyMsg}`;
+    <div class="pill-row"><button class="btn" id="pj-new">＋ Tạo dự án</button></div>
+    ${cards || `<div class="empty"><div class="em">📁</div><p>Chưa có dự án. Bấm "Tạo dự án".</p></div>`}`;
   document.getElementById("pj-new").onclick = () => openProjectModal();
-  document.getElementById("pj-stats").onclick = () => openProjectStatsModal();
-  document.getElementById("pj-filter").onchange = (e) => { state.params.pj_filter = e.target.value; bizProjects(); };
   on("[data-pjed]", "click", (e) => openProjectModal(pmap[e.currentTarget.dataset.pjed]), bcontent());
   on("[data-pjexp]", "click", (e) => exportProjectInvoicesModal(pmap[e.currentTarget.dataset.pjexp]), bcontent());
   on("[data-pjqr]", "click", (e) => showProjectQR(pmap[e.currentTarget.dataset.pjqr]), bcontent());
   on("[data-pjdet]", "click", (e) => projectDetail(pmap[e.currentTarget.dataset.pjdet]), bcontent());
-  on("[data-pjdone]", "click", async (e) => {
-    const t = e.currentTarget;
-    const name = t.dataset.name;
-    const ln = Number(t.dataset.ln) || 0;
-    const chiNo = Number(t.dataset.chino) || 0;
-    // Re-check điều kiện phòng trường hợp DB đổi giữa render và click
-    if (ln < 0 || chiNo > 0) {
-      return toast(ln < 0 ? `Đang lỗ ${fmtVND(-ln)} — không thể hoàn thành.` : `Còn ${fmtVND(chiNo)} chưa CK cho NV.`, "err");
-    }
-    if (!confirm(`Đánh dấu dự án "${name}" là ĐÃ HOÀN THÀNH?\nDự án sẽ ẩn khỏi danh sách "Đang chạy". Bạn có thể mở lại bất cứ lúc nào.`)) return;
-    const { error: e2 } = await sb.from("biz_projects").update({ completed_at: new Date().toISOString() }).eq("id", t.dataset.pjdone);
-    if (e2) return toast("Lỗi: " + e2.message, "err");
-    toast(`Đã hoàn thành "${name}"`, "ok"); bizProjects();
-  }, bcontent());
-  on("[data-pjreopen]", "click", async (e) => {
-    const t = e.currentTarget;
-    if (!confirm(`Mở lại dự án "${t.dataset.name}"?\nDự án sẽ quay về danh sách "Đang chạy".`)) return;
-    const { error: e2 } = await sb.from("biz_projects").update({ completed_at: null }).eq("id", t.dataset.pjreopen);
-    if (e2) return toast("Lỗi: " + e2.message, "err");
-    toast("Đã mở lại dự án", "ok"); bizProjects();
-  }, bcontent());
   on("[data-pjdel]", "click", async (e) => {
     const name = e.currentTarget.dataset.name;
     if (!confirm(`Xoá dự án "${name}"?\nSẽ xoá luôn: khoản Thu, khoản Chi, và các HOÁ ĐƠN thuộc dự án này.`)) return;
@@ -2949,188 +1134,11 @@ async function bizProjects() {
     toast("Đã xoá dự án và dữ liệu liên quan", "ok"); bizProjects();
   }, bcontent());
 }
-
-/* ---------- Modal Thống kê dự án ---------- */
-async function openProjectStatsModal() {
-  showModal("📊 Thống kê dự án", loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
-  const body = modalRoot().querySelector(".modal-body");
-  const [{ data: projects }, { data: invoices }, { data: expenses }, { data: incomes }, { data: attRows }, rates, { data: leaders }] = await Promise.all([
-    sb.from("biz_projects").select("*").order("created_at", { ascending: false }),
-    sb.from("biz_invoices").select("*"),
-    sb.from("biz_expenses").select("*"),
-    sb.from("biz_incomes").select("*"),
-    sb.from("biz_attendance").select("*").eq("status", "approved").eq("paid", true),
-    getAttRates(),
-    sb.from("profiles").select("id,full_name").in("role", ["leader", "admin"]),
-  ]);
-  const projMap = {}; (projects || []).forEach((p) => projMap[p.id] = p);
-  const projByName = {}; (projects || []).forEach((p) => projByName[(p.name || "").trim()] = p);
-  const leaderName = {}; (leaders || []).forEach((l) => leaderName[l.id] = l.full_name);
-  const amtOf = (x) => (x.transport === "ca_nhan" ? (rates.ca_nhan || 0) : (rates.xe_om || 0));
-
-  // Hàm render body theo filter dự án
-  const render = (pid) => {
-    const scope = pid === "all" ? null : pid; // null = tất cả
-    const pfilter = (p) => scope === null || p.id === scope;
-    const projsIn = (projects || []).filter(pfilter);
-    const invsIn = (invoices || []).filter((iv) => scope === null ? true : (projByName[(iv.project_name || "").trim()] && projByName[(iv.project_name || "").trim()].id === scope));
-    const expsIn = (expenses || []).filter((x) => scope === null ? true : x.project_id === scope).filter((x) => x.paid);
-    const incsIn = (incomes || []).filter((x) => scope === null ? true : x.project_id === scope);
-    // Phụ cấp: chỉ tính khi scope = tất cả (vì không gắn dự án)
-    const attIn = scope === null ? (attRows || []) : [];
-
-    const tQuote = projsIn.reduce((s, p) => s + Number(p.quote || 0), 0);
-    const tThu = incsIn.reduce((s, x) => s + Number(x.amount || 0), 0);
-    const tLK = invsIn.reduce((s, x) => s + Number(x.total || 0), 0);
-    const tNV = expsIn.reduce((s, x) => s + Number(x.amount || 0), 0);
-    const tPC = attIn.reduce((s, x) => s + amtOf(x), 0);
-    const tLN = tThu - tLK - tNV - tPC;
-
-    const scopeName = scope === null ? "Tất cả dự án" : (projMap[scope] ? projMap[scope].name : "?");
-    const safeName = scopeName.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-
-    const tile = (key, label, val, color, note) => `
-      <div class="card" style="margin:0;flex:1;min-width:200px">
-        <div class="meta">${label}${note ? ` <span title="${esc(note)}" style="cursor:help">ⓘ</span>` : ""}</div>
-        <div style="font-size:1.3rem;font-weight:800;${color ? "color:" + color : ""}">${fmtVND(val)}</div>
-        <button class="btn ghost sm" data-stexp="${key}" style="margin-top:6px;width:100%">⬇ Xuất CSV</button>
-      </div>`;
-
-    const pcNote = scope === null ? "" : "Không tính khi lọc 1 dự án vì phụ cấp không gắn dự án.";
-
-    body.innerHTML = `
-      <div class="row" style="gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <label><b>Dự án:</b></label>
-        <select id="st-filter" style="flex:1;min-width:220px;max-width:360px">
-          <option value="all">Tất cả dự án (${(projects || []).length})</option>
-          ${(projects || []).map((p) => `<option value="${p.id}" ${p.id === scope ? "selected" : ""}>${esc(p.name)}${p.completed_at ? " ✅" : ""}</option>`).join("")}
-        </select>
-      </div>
-      <p class="meta" style="margin:0 0 10px">Đang xem: <b>${esc(scopeName)}</b> · Click <b>⬇ Xuất CSV</b> ở mỗi ô để tải chi tiết.</p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:12px">
-        ${tile("quote", "💼 Tổng báo giá", tQuote)}
-        ${tile("thu", "💰 Tổng thu đến hiện tại", tThu, "var(--green)")}
-        ${tile("lk", "🔧 Tổng chi linh kiện (HĐ)", tLK, "var(--red)", "Tổng tiền các hoá đơn gốc của dự án.")}
-        ${tile("nv", "👷 Tổng chi nhân viên (đã CK)", tNV, "var(--red)", "Các khoản chi cho NV đã chuyển khoản.")}
-        ${tile("pc", "🕒 Tổng chi phụ cấp (đã CK)", tPC, "var(--red)", pcNote)}
-        ${tile("ln", "📈 Tổng lợi nhuận", tLN, tLN < 0 ? "var(--red)" : "var(--green)", "= Thu − LK − NV − Phụ cấp")}
-      </div>
-      ${scope !== null ? `<p class="meta">⚠ Khi lọc 1 dự án, phần Phụ cấp = 0 vì ca chấm công không được gắn với dự án cụ thể.</p>` : ""}`;
-
-    document.getElementById("st-filter").onchange = (e) => render(e.target.value === "all" ? "all" : e.target.value);
-
-    // Handlers export
-    body.querySelectorAll("[data-stexp]").forEach((btn) => {
-      btn.onclick = () => {
-        const key = btn.dataset.stexp;
-        let rows, fname;
-        if (key === "quote") {
-          // Mỗi dự án 1 dòng: tên dự án, báo giá
-          rows = [["STT", "Dự án", "Báo giá (đ)"]];
-          projsIn.forEach((p, i) => rows.push([i + 1, p.name, p.quote || 0]));
-          rows.push(["", "— TỔNG —", tQuote]);
-          fname = `bao-gia-${safeName}.csv`;
-        } else if (key === "thu") {
-          // Group theo dự án: dự án → tổng thu
-          const byProj = {};
-          incsIn.forEach((x) => { byProj[x.project_id] = (byProj[x.project_id] || 0) + Number(x.amount || 0); });
-          rows = [["STT", "Dự án", "Tổng đã thu (đ)"]];
-          const entries = projsIn
-            .map((p) => ({ name: p.name, total: byProj[p.id] || 0 }))
-            .sort((a, b) => b.total - a.total);
-          entries.forEach((e, i) => rows.push([i + 1, e.name, e.total]));
-          rows.push(["", "— TỔNG —", tThu]);
-          fname = `thu-${safeName}.csv`;
-        } else if (key === "lk") {
-          // Group linh kiện: tên + đơn vị + đơn giá → SL tổng, thành tiền
-          const byItem = {};
-          invsIn.forEach((iv) => {
-            (iv.items || []).forEach((it) => {
-              const name = (it.name || "").trim(); if (!name) return;
-              const unit = (it.unit || "").trim();
-              const price = Number(it.price || 0);
-              const qty = Number(it.qty || 0);
-              const k = `${name}||${unit}||${price}`;
-              if (!byItem[k]) byItem[k] = { name, unit, price, qty: 0 };
-              byItem[k].qty += qty;
-            });
-          });
-          const items = Object.values(byItem).sort((a, b) => (b.price * b.qty) - (a.price * a.qty));
-          rows = [["STT", "Linh kiện", "Đơn vị", "Số lượng", "Đơn giá (đ)", "Thành tiền (đ)"]];
-          let totalLK = 0;
-          items.forEach((it, i) => {
-            const line = it.qty * it.price;
-            totalLK += line;
-            rows.push([i + 1, it.name, it.unit, it.qty, it.price, line]);
-          });
-          rows.push(["", "— TỔNG —", "", "", "", totalLK]);
-          fname = `chi-linh-kien-${safeName}.csv`;
-        } else if (key === "nv") {
-          // Group theo nhân viên: tên NV → tổng đã nhận
-          const byEmp = {};
-          expsIn.forEach((x) => {
-            const nm = (x.employee_name || "(không rõ)").trim();
-            byEmp[nm] = (byEmp[nm] || 0) + Number(x.amount || 0);
-          });
-          rows = [["STT", "Nhân viên", "Tổng đã nhận (đ)"]];
-          const entries = Object.entries(byEmp).sort((a, b) => b[1] - a[1]);
-          entries.forEach((e, i) => rows.push([i + 1, e[0], e[1]]));
-          rows.push(["", "— TỔNG —", tNV]);
-          fname = `chi-nhan-vien-${safeName}.csv`;
-        } else if (key === "pc") {
-          if (!attIn.length) { toast("Không có dữ liệu phụ cấp (chỉ tính khi xem Tất cả dự án)", "err"); return; }
-          // Group theo leader: tên → tổng phụ cấp
-          const byLd = {};
-          attIn.forEach((x) => {
-            const nm = leaderName[x.leader_id] || "(không rõ)";
-            byLd[nm] = (byLd[nm] || 0) + amtOf(x);
-          });
-          rows = [["STT", "Leader", "Tổng phụ cấp đã nhận (đ)"]];
-          const entries = Object.entries(byLd).sort((a, b) => b[1] - a[1]);
-          entries.forEach((e, i) => rows.push([i + 1, e[0], e[1]]));
-          rows.push(["", "— TỔNG —", tPC]);
-          fname = `phu-cap-${safeName}.csv`;
-        } else if (key === "ln") {
-          // Mỗi dự án 1 dòng với LN (chưa trừ phụ cấp), tổng cuối
-          rows = [["STT", "Dự án", "Thu (đ)", "Chi linh kiện (đ)", "Chi NV đã CK (đ)", "Lợi nhuận (đ)"]];
-          let sumThu = 0, sumLK = 0, sumNV = 0, sumLN = 0;
-          projsIn.forEach((p, i) => {
-            const thu = (incomes || []).filter((x) => x.project_id === p.id).reduce((s, x) => s + Number(x.amount || 0), 0);
-            const lk = (invoices || []).filter((iv) => (iv.project_name || "").trim() === (p.name || "").trim()).reduce((s, x) => s + Number(x.total || 0), 0);
-            const nvPaid = (expenses || []).filter((x) => x.project_id === p.id && x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
-            const ln = thu - lk - nvPaid;
-            sumThu += thu; sumLK += lk; sumNV += nvPaid; sumLN += ln;
-            rows.push([i + 1, p.name, thu, lk, nvPaid, ln]);
-          });
-          rows.push(["", "— TỔNG —", sumThu, sumLK, sumNV, sumLN]);
-          if (scope === null) {
-            rows.push(["", "Phụ cấp đã CK (toàn hệ thống, không chia dự án)", "", "", "", -tPC]);
-            rows.push(["", "LỢI NHUẬN SAU PHỤ CẤP", "", "", "", sumLN - tPC]);
-          }
-          fname = `loi-nhuan-${safeName}.csv`;
-        }
-        downloadCSV(fname, rows);
-      };
-    });
-  };
-  render("all");
-}
-
-async function openProjectModal(ex) {
+function openProjectModal(ex) {
   ex = ex || {};
-  // Load danh sách leader để chọn người dạy
-  const { data: leaders } = await sb.from("profiles").select("id,full_name,email").eq("role", "leader").order("full_name");
-  const leaderOptions = (leaders || []).map((l) => `<option value="${l.id}" ${ex.teaching_leader_id === l.id ? "selected" : ""}>${esc(l.full_name || l.email || "?")}</option>`).join("");
   showModal(ex.id ? "Sửa dự án" : "Tạo dự án", `
     <div class="field"><label>Tên dự án *</label><input id="pj-name" value="${esc(ex.name || "")}"/></div>
     <div class="field"><label>Báo giá (đ)</label><input id="pj-quote" type="number" value="${ex.quote ?? 0}"/></div>
-    <div class="field"><label>Leader dạy (dùng cho xếp lịch học)</label>
-      <select id="pj-teacher">
-        <option value="">— Chưa phân công —</option>
-        ${leaderOptions}
-      </select>
-      <div class="help">Chọn Leader sẽ đứng lớp dạy TG. Chỉ Leader được chọn ở đây mới tham gia xếp lịch tự động, không phải tất cả Leader có task.</div>
-    </div>
     <div class="field"><label>Ghi chú</label><input id="pj-note" value="${esc(ex.note || "")}"/></div>
     <div class="help">Mẹo: đặt tên dự án trùng với ô "Dự án" trên hoá đơn để tự cộng vào phần Thu.</div>`,
     `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="pj-save">Lưu</button>`);
@@ -3138,12 +1146,7 @@ async function openProjectModal(ex) {
     const name = document.getElementById("pj-name").value.trim();
     if (!name) return toast("Nhập tên dự án", "err");
     e.target.disabled = true;
-    const payload = {
-      name,
-      quote: Number(document.getElementById("pj-quote").value) || 0,
-      note: document.getElementById("pj-note").value.trim(),
-      teaching_leader_id: document.getElementById("pj-teacher").value || null,
-    };
+    const payload = { name, quote: Number(document.getElementById("pj-quote").value) || 0, note: document.getElementById("pj-note").value.trim() };
     const res = ex.id ? await sb.from("biz_projects").update(payload).eq("id", ex.id) : await sb.from("biz_projects").insert(payload);
     if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
     toast("Đã lưu", "ok"); closeModal(); bizProjects();
@@ -3165,19 +1168,16 @@ async function projectDetail(p) {
   const taskNd = [...new Set(ndList.map((n) => CHI2TASK[n] || n))].filter((n) => !TASK_SKIP.has(n));
   const empNames = (emps || []).map((e) => e.name);
   const invSum = (invoices || []).reduce((s, x) => s + Number(x.total || 0), 0);
-  const expPaidSum = (expenses || []).filter((x) => x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
-  const expUnpaidSum = (expenses || []).filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+  const expSum = (expenses || []).reduce((s, x) => s + Number(x.amount || 0), 0);
   const thu = (incomes || []).reduce((s, x) => s + Number(x.amount || 0), 0);
-  const chiDa = invSum + expPaidSum;
-  const chiNo = expUnpaidSum;
-  const ln = thu - chiDa;
+  const chi = invSum + expSum;
   const incRows = (incomes || []).map((x) => `<tr><td>${esc(x.payer || "")}</td><td>${fmtDate(x.income_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td><button class="btn ghost sm" data-incdel="${x.id}">✕</button></td></tr>`).join("");
   const invRows = (invoices || []).map((iv) => `<tr><td>${esc(iv.customer || "")}</td><td>${fmtDate(iv.invoice_date)}</td><td style="text-align:right">${fmtVND(iv.total)}</td></tr>`).join("");
   const expRows = (expenses || []).map((x) => `<tr><td>${esc(x.note || "")}${x.employee_name ? ` — <b>${esc(x.employee_name)}</b>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right">${fmtVND(x.amount)}</td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa</span>'}</td><td><button class="btn danger sm" data-expdel="${x.id}">✕</button></td></tr>`).join("");
   body.innerHTML = `
     <div class="pill-row" style="margin-bottom:8px"><button class="btn sm" id="pj-exp">Xuất HĐ dự án (gộp)</button>
       <button class="btn secondary sm" id="pj-qr">💰 QR nhận tiền</button></div>
-    <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Đã chi: <b style="color:var(--red)">${fmtVND(chiDa)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công đã CK ${fmtVND(expPaidSum)})${chiNo > 0 ? ` · <b style="color:var(--amber)">Còn nợ NV: ${fmtVND(chiNo)}</b>` : ""} · LN: <b style="color:${ln < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(ln)}</b></div>
+    <div class="meta">Báo giá: <b>${fmtVND(p.quote)}</b> · Thu: <b style="color:var(--green)">${fmtVND(thu)}</b> · Chi: <b style="color:var(--red)">${fmtVND(chi)}</b> (hoá đơn ${fmtVND(invSum)} + nhân công ${fmtVND(expSum)}) · LN: <b style="color:${thu - chi < 0 ? "var(--red)" : "var(--green)"}">${fmtVND(thu - chi)}</b></div>
 
     <h3 style="font-size:14px;margin:14px 0 4px">Thu — khoản nhận từ khách</h3>
     <div class="table-wrap"><table><thead><tr><th>Người chuyển</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th></th></tr></thead>
@@ -3192,7 +1192,7 @@ async function projectDetail(p) {
     <div class="table-wrap"><table><thead><tr><th>Khách</th><th>Ngày</th><th style="text-align:right">Số tiền</th></tr></thead>
     <tbody>${invRows || `<tr><td colspan="3" class="empty">Chưa có hoá đơn gắn dự án này (đặt ô "Dự án" trên hoá đơn = "${esc(p.name)}").</td></tr>`}</tbody></table></div>
 
-    <h3 style="font-size:14px;margin:16px 0 4px">Chi — trả nhân công (đã CK ${fmtVND(expPaidSum)}${expUnpaidSum > 0 ? " · chưa CK " + fmtVND(expUnpaidSum) : ""})</h3>
+    <h3 style="font-size:14px;margin:16px 0 4px">Chi — trả nhân công (${fmtVND(expSum)})</h3>
     <div class="table-wrap"><table><thead><tr><th>Nội dung — Nhân viên</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th><th></th></tr></thead>
     <tbody>${expRows || `<tr><td colspan="5" class="empty">Chưa có khoản chi nhân công.</td></tr>`}</tbody></table></div>
     <datalist id="nd-list">${ndList.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist>
@@ -3298,10 +1298,7 @@ async function projectDetail(p) {
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
-        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || [])
-  .filter(l => l.role === "leader")
-  .map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`)
-  .join("")}</select></div>
+        <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || []).map((l) => `<option value="${l.id}" ${ex.assignee_id === l.id ? "selected" : ""}>${esc(l.full_name)}${l.email ? " — " + esc(l.email) : ""}</option>`).join("")}</select></div>
         <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
 `,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
@@ -3652,8 +1649,7 @@ async function leaderTasks() {
       } else if (mine && t.status === "review") {
         actionHTML = `<button class="btn ghost sm" data-mtundone="${t.id}">Rút lại</button>`;
       }
-      const rowClass = [mine ? "" : "", t.status === "done" ? "mt-done-row" : ""].filter(Boolean).join(" ");
-      return `<tr class="${rowClass}"${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
+      return `<tr${mine ? ' style="background:rgba(37,83,214,.06)"' : ""}>
         <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${noteHTML}</td>
         <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}${mine ? ' <span class="badge blue">Tôi</span>' : ""}</td>
         <td>${stx(t.status)}</td>
@@ -3666,7 +1662,6 @@ async function leaderTasks() {
         <colgroup><col style="width:30%"><col style="width:24%"><col style="width:16%"><col style="width:30%"></colgroup>
         <thead><tr><th>Phần việc</th><th>Người phụ trách</th><th>Trạng thái</th><th style="text-align:right">Hành động</th></tr></thead>
         <tbody>${rows}</tbody></table></div>
-      ${r === "admin" ? `
       <h3 style="font-size:13px;margin:12px 0 2px">Thông báo tiến độ</h3>
       ${(progressAll || []).filter((x) => x.project_id === g.p.id).map((x) => `<div style="padding:8px 0;border-top:1px solid var(--line)">
           <div style="display:flex;justify-content:space-between;gap:8px"><span class="meta"><b>${fmtDate(x.report_date)}</b></span>
@@ -3679,45 +1674,18 @@ async function leaderTasks() {
         <div class="field" style="flex:2;min-width:160px;margin:0"><label>Nội dung</label><input class="lpg-content" data-pid="${g.p.id}" placeholder="Hôm nay đã làm gì…"/></div>
         <div class="field" style="flex:2;min-width:220px;margin:0"><label>Link đính kèm (mỗi dòng 1 link)</label><textarea class="lpg-url" data-pid="${g.p.id}" rows="2" placeholder="https://…
 https://…"></textarea></div>
-        <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div>` : ""}</div>`;
+        <button class="btn sm" data-lpgadd="${g.p.id}" type="button">Đăng</button></div></div>`;
   };
-  const payRows = (pays || []).map((x) => `<tr class="${x.paid ? "mt-paid-row" : ""}"><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
-  // Đếm số lượng để hiển thị trên nút toggle
-  const nDoneTasks = (tasks || []).filter((t) => isMine(t) && t.status === "done").length;
-  const nPaidPays  = (pays || []).filter((x) => x.paid).length;
+  const payRows = (pays || []).map((x) => `<tr><td>${esc(x.note || "")}${projById[x.project_id] ? ` <span class="badge gray">${esc(projById[x.project_id].name)}</span>` : ""}</td><td>${fmtDate(x.expense_date)}</td><td style="text-align:right"><b>${fmtVND(x.amount)}</b></td><td>${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'}</td></tr>`).join("");
   document.getElementById("mt-body").innerHTML = `
-    <style>.mt-done-row.hidden,.mt-paid-row.hidden{display:none}</style>
-    ${nDoneTasks > 0 ? `<div style="margin:0 0 10px"><button class="btn ghost sm" id="mt-toggle-done">👁 Hiện ${nDoneTasks} phần việc đã duyệt</button></div>` : ""}
     ${groups.length ? groups.map(projBlock).join("") : `<div class="empty"><div class="em">📋</div><p>Bạn chưa được giao phần việc nào.</p><p class="meta">ID của bạn: <code>${esc(me)}</code>${(tasks || []).length ? ` · đọc được ${(tasks || []).length} task nhưng không có task nào gắn ID này.` : " · không đọc được task nào (RLS?)."}</p></div>`}
     <h3 style="font-size:14px;margin:18px 0 6px">Lương của tôi</h3>
     <p class="meta">Tính theo tên: <b>${esc(empName || "")}</b>${state.profile.biz_employee_id ? "" : " <span class=\"badge amber\">chưa liên kết Nhân viên</span>"}</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 10px">
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Đã chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--green)">${fmtVND(paid)}</div></div>
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(unpaid)}</div></div></div>
-    ${nPaidPays > 0 ? `<div style="margin:0 0 8px"><button class="btn ghost sm" id="mt-toggle-paid">👁 Hiện ${nPaidPays} khoản đã CK</button></div>` : ""}
     <div class="table-wrap"><table><thead><tr><th>Nội dung / Dự án</th><th>Ngày</th><th style="text-align:right">Số tiền</th><th>TT</th></tr></thead>
     <tbody>${payRows || `<tr><td colspan="4" class="empty">Chưa có khoản lương.</td></tr>`}</tbody></table></div>`;
-  // Mặc định ẩn các row đã xong / đã CK
-  document.querySelectorAll(".mt-done-row").forEach((r) => r.classList.add("hidden"));
-  document.querySelectorAll(".mt-paid-row").forEach((r) => r.classList.add("hidden"));
-  const btnDone = document.getElementById("mt-toggle-done");
-  if (btnDone) {
-    let shown = false;
-    btnDone.onclick = () => {
-      shown = !shown;
-      document.querySelectorAll(".mt-done-row").forEach((r) => r.classList.toggle("hidden", !shown));
-      btnDone.textContent = shown ? `🙈 Ẩn ${nDoneTasks} phần việc đã duyệt` : `👁 Hiện ${nDoneTasks} phần việc đã duyệt`;
-    };
-  }
-  const btnPaid = document.getElementById("mt-toggle-paid");
-  if (btnPaid) {
-    let shown = false;
-    btnPaid.onclick = () => {
-      shown = !shown;
-      document.querySelectorAll(".mt-paid-row").forEach((r) => r.classList.toggle("hidden", !shown));
-      btnPaid.textContent = shown ? `🙈 Ẩn ${nPaidPays} khoản đã CK` : `👁 Hiện ${nPaidPays} khoản đã CK`;
-    };
-  }
   // Chèn khối file dưới mỗi thẻ dự án (chỉ áp cho các dự án mình có tham gia)
   for (const g of groups) {
     const card = document.querySelector(`[data-mtcard="${g.p.id}"]`);
@@ -3827,58 +1795,28 @@ async function guestProjects() {
 /* ---------- Nhân viên (lương / thanh toán) ---------- */
 async function bizEmployees() {
   bcontent().innerHTML = loadingHTML();
-  const [{ data: emps, error }, { data: expensesRaw }, { data: projects }, { data: tasksRaw }, { data: leadersRaw }] = await Promise.all([
+  const [{ data: emps, error }, { data: expensesRaw }, { data: projects }] = await Promise.all([
     sb.from("biz_employees").select("*").order("name"),
     sb.from("biz_expenses").select("*"),
     sb.from("biz_projects").select("id,name"),
-    sb.from("biz_tasks").select("id,project_id,title,status,assignee_id"),
-    sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
   ]);
   if (error) { bcontent().innerHTML = `<div class="empty">Lỗi tải nhân viên: ${esc(error.message)}</div>`; return; }
   const projName = {}; (projects || []).forEach((p) => projName[p.id] = p.name);
   const empList = emps || [];
   const empById = {}; empList.forEach((e) => empById[e.id] = e);
   const empByName = {}; empList.forEach((e) => empByName[e.name] = e);
-
-  // Map assignee_id (profile.id) → employee_name để khớp task với expense
-  const norm = (v) => (v || "").toString().trim().toLowerCase();
-  const empNameByProfileId = {};
-  (leadersRaw || []).forEach((l) => {
-    let emp = null;
-    if (l.biz_employee_id) emp = empList.find((e) => norm(e.id) === norm(l.biz_employee_id));
-    if (!emp) emp = empList.find((e) => norm(e.name) === norm(l.full_name));
-    empNameByProfileId[l.id] = emp ? emp.name : l.full_name;
-  });
-  // Lookup task theo (project_id, title, employee_name)
-  const tk = (pid, title, empName) => `${pid || ""}||${norm(title)}||${norm(empName)}`;
-  const taskLookup = {};
-  (tasksRaw || []).forEach((t) => {
-    const en = empNameByProfileId[t.assignee_id];
-    if (!en) return;
-    taskLookup[tk(t.project_id, t.title, en)] = t;
-  });
-
-  // Chỉ hiện khoản chi mà nhiệm vụ tương ứng đã DUYỆT (status=done).
-  // Ngoại lệ: khoản trong TASK_SKIP (không có task) hoặc không tìm được task → vẫn hiện.
-  const items = (expensesRaw || []).filter((x) => {
-    if (!(x.employee_name || "").trim()) return false;
-    if (TASK_SKIP.has(x.note)) return true;
-    const title = CHI2TASK[x.note] || x.note;
-    const t = taskLookup[tk(x.project_id, title, x.employee_name)];
-    if (!t) return true;
-    return t.status === "done";
-  });
+  const items = (expensesRaw || []).filter((x) => (x.employee_name || "").trim());
   const expMap = {}; items.forEach((x) => expMap[x.id] = x);
   const byName = {}; items.forEach((x) => { const n = x.employee_name.trim(); (byName[n] = byName[n] || []).push(x); });
   const allNames = [...new Set([...empList.map((e) => e.name), ...Object.keys(byName)])].sort((a, b) => a.localeCompare(b, "vi"));
   bcontent().innerHTML = `
     <div class="pill-row">
       <select id="emp-filter" style="max-width:220px"><option value="">Tất cả nhân viên</option>${allNames.map((n) => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}</select>
-      <select id="emp-status" style="max-width:170px"><option value="unpaid" selected>Chưa CK</option><option value="paid">Đã CK</option><option value="">Tất cả</option></select>
+      <select id="emp-status" style="max-width:170px"><option value="">Tất cả</option><option value="unpaid">Chưa CK</option><option value="paid">Đã CK</option></select>
       <button class="btn" id="emp-new">＋ Nhân viên</button></div>
     <div id="emp-summary"></div>
     <div id="emp-list"></div>
-    <p class="meta" style="margin-top:8px">Lương tổng hợp từ <b>khoản chi nhân công</b> ở thẻ Dự án. Chỉ hiển thị khoản có <b>nhiệm vụ đã duyệt</b> ("Đã duyệt" ở tab Dự án). Nhiệm vụ đang "Chờ làm" / "Chờ duyệt" sẽ tự ẩn đến khi được duyệt.</p>`;
+    <p class="meta" style="margin-top:8px">Lương tổng hợp từ các <b>khoản chi nhân công</b> ghi ở thẻ Dự án (theo tên nhân viên).</p>`;
   document.getElementById("emp-new").onclick = () => openEmployeeModal(bizEmployees);
   const renderList = () => {
     const ef = document.getElementById("emp-filter").value;
@@ -3890,8 +1828,6 @@ async function bizEmployees() {
       list.forEach((x) => { if (x.paid) totalPaid += Number(x.amount || 0); else totalUnpaid += Number(x.amount || 0); });
       const unpaid = list.filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
       const items2 = sf ? list.filter((x) => (sf === "paid" ? x.paid : !x.paid)) : list;
-      // Ẩn card của NV không có khoản nào match filter (VD lọc "Chưa CK" mà NV đã CK hết)
-      if (sf && items2.length === 0) return "";
       const rows = items2.map((x) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)">
         <div style="min-width:0"><div>${esc(x.note || "(không tên)")} ${x.project_id && projName[x.project_id] ? `<span class="badge gray">${esc(projName[x.project_id])}</span>` : ""}</div>
           <div class="meta">${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'} · ${fmtDate(x.expense_date)}</div></div>
@@ -3903,17 +1839,12 @@ async function bizEmployees() {
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="meta" style="margin-right:8px">Chưa CK: <b style="color:var(--red)">${fmtVND(unpaid)}</b></span>
             ${e ? `${e.bank_account ? `<button class="btn sm" data-empqr="${e.id}" data-amt="${unpaid}">QR trả lương</button>` : ""}<button class="btn ghost sm" data-emped="${e.id}">Sửa</button><button class="btn danger sm" data-empdel="${e.id}" data-name="${esc(name)}">Xoá</button>` : ""}</div></div>
         ${rows || `<p class="muted" style="margin:8px 0 0">Chưa có khoản lương nào.</p>`}</div>`;
-    }).filter(Boolean).join("");
+    }).join("");
     document.getElementById("emp-summary").innerHTML = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin:0 0 12px">
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Tổng chưa chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--red)">${fmtVND(totalUnpaid)}</div></div>
       <div class="card" style="margin:0;flex:1;min-width:150px"><div class="meta">Tổng đã chuyển khoản</div><div style="font-size:1.2rem;font-weight:800;color:var(--green)">${fmtVND(totalPaid)}</div></div></div>`;
     const listEl = document.getElementById("emp-list");
-    const emptyMsg = sf === "unpaid"
-      ? `<div class="empty"><div class="em">✅</div><p>Không còn khoản nào chưa CK. Đổi bộ lọc sang <b>Đã CK</b> hoặc <b>Tất cả</b> để xem lịch sử.</p></div>`
-      : sf === "paid"
-        ? `<div class="empty"><div class="em">💸</div><p>Chưa có khoản nào đã CK.</p></div>`
-        : `<div class="empty"><div class="em">👥</div><p>Chưa có dữ liệu lương. Ghi khoản chi nhân công ở thẻ Dự án (có tên nhân viên).</p></div>`;
-    listEl.innerHTML = cards || emptyMsg;
+    listEl.innerHTML = cards || `<div class="empty"><div class="em">👥</div><p>Chưa có dữ liệu lương. Ghi khoản chi nhân công ở thẻ Dự án (có tên nhân viên).</p></div>`;
     on("[data-emped]", "click", (e) => openEmployeeModal(bizEmployees, empById[e.currentTarget.dataset.emped]), listEl);
     on("[data-empqr]", "click", (e) => showEmployeeQR(empById[e.currentTarget.dataset.empqr], Number(e.currentTarget.dataset.amt) || 0), listEl);
     on("[data-empdel]", "click", async (e) => {
@@ -3963,39 +1894,13 @@ async function showEmployeeQR(e /*, amount */) {
   if (!e || !e.bank_account || !e.bank_code) { toast("Nhân viên chưa có STK/ngân hàng — bấm Sửa để thêm", "err"); return; }
   showModal("Trả lương — " + esc(e.name), loadingHTML(), `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
   const body = modalRoot().querySelector(".modal-body");
-  const [{ data: unpaidRows }, { data: projects }, { data: tasksRaw }, { data: leadersRaw }, { data: empRow }] = await Promise.all([
+  const [{ data: unpaidRows }, { data: projects }] = await Promise.all([
     sb.from("biz_expenses").select("*").eq("employee_name", e.name).eq("paid", false).order("expense_date", { ascending: true }),
     sb.from("biz_projects").select("id,name"),
-    sb.from("biz_tasks").select("id,project_id,title,status,assignee_id"),
-    sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
-    sb.from("biz_employees").select("id,name"),
   ]);
-  // Áp dụng đúng logic filter với tab Nhân viên: chỉ giữ khoản có task done (hoặc TASK_SKIP / không có task)
-  const norm = (v) => (v || "").toString().trim().toLowerCase();
-  const empListAll = empRow || [];
-  const empNameByProfileId = {};
-  (leadersRaw || []).forEach((l) => {
-    let em = null;
-    if (l.biz_employee_id) em = empListAll.find((x) => norm(x.id) === norm(l.biz_employee_id));
-    if (!em) em = empListAll.find((x) => norm(x.name) === norm(l.full_name));
-    empNameByProfileId[l.id] = em ? em.name : l.full_name;
-  });
-  const tk = (pid, title, empName) => `${pid || ""}||${norm(title)}||${norm(empName)}`;
-  const taskLookup = {};
-  (tasksRaw || []).forEach((t) => {
-    const en = empNameByProfileId[t.assignee_id];
-    if (!en) return;
-    taskLookup[tk(t.project_id, t.title, en)] = t;
-  });
-  const list = (unpaidRows || []).filter((x) => {
-    if (TASK_SKIP.has(x.note)) return true;
-    const title = CHI2TASK[x.note] || x.note;
-    const t = taskLookup[tk(x.project_id, title, x.employee_name)];
-    if (!t) return true;
-    return t.status === "done";
-  });
+  const list = unpaidRows || [];
   const projName = {}; (projects || []).forEach((p) => projName[p.id] = p.name);
-  if (!list.length) { body.innerHTML = `<div class="empty">Không còn khoản nào chưa CK cho <b>${esc(e.name)}</b> (chỉ tính nhiệm vụ đã duyệt).</div>`; return; }
+  if (!list.length) { body.innerHTML = `<div class="empty">Không còn khoản nào chưa CK cho <b>${esc(e.name)}</b>.</div>`; return; }
   const rows = list.map((x) => `<tr>
     <td><input type="checkbox" class="pay-chk" data-id="${x.id}" data-amt="${Number(x.amount) || 0}" checked/></td>
     <td>${esc(x.note || "(không tên)")}${projName[x.project_id] ? `<div class="meta">${esc(projName[x.project_id])}</div>` : ""}</td>
@@ -4325,58 +2230,16 @@ async function doLogout() {
   renderAuth();
 }
 /* Tạo tài khoản cho người khác mà KHÔNG đăng xuất admin:
-   dùng một client phụ (không lưu session). Yêu cầu TẮT "Confirm email".
-   opts:
-     - skipEmailCheck: bỏ qua check email đã tồn tại (dùng cho vòng retry tự tăng số)
-     - allowDuplicateName: cho phép trùng tên, không hỏi confirm */
-async function adminCreateUser(email, password, full_name, role, opts = {}) {
-  const emailLc = String(email || "").trim().toLowerCase();
-  const nameTr  = String(full_name || "").trim();
-
-  // ---- Pre-check trùng lặp trong bảng profiles ----
-  const checks = [];
-  if (!opts.skipEmailCheck && emailLc) {
-    checks.push(sb.from("profiles").select("id,full_name,email,role").eq("email", emailLc));
-  }
-  if (!opts.allowDuplicateName && nameTr) {
-    // ilike không kèm % → exact match, không phân biệt hoa thường
-    checks.push(sb.from("profiles").select("id,full_name,email,role").ilike("full_name", nameTr));
-  }
-  if (checks.length) {
-    const results = await Promise.all(checks);
-    for (const r of results) {
-      if (r.error) throw new Error("Không kiểm tra được trùng lặp: " + r.error.message);
-    }
-    const merged = results.flatMap((r) => r.data || []);
-
-    const dupEmail = merged.find((x) => (x.email || "").toLowerCase() === emailLc);
-    if (dupEmail) throw new Error(`Email đã tồn tại: ${emailLc}`);
-
-    const dupName = merged.find((x) =>
-      (x.full_name || "").trim().toLowerCase() === nameTr.toLowerCase()
-    );
-    if (dupName) {
-      const ok = confirm(
-        `Đã có tài khoản trùng tên "${nameTr}":\n` +
-        `• ${dupName.email || "(chưa có email)"} — vai trò: ${dupName.role}\n\n` +
-        `⚠ Tạo tài khoản MỚI sẽ khiến cùng 1 người có 2 hồ sơ khác nhau, ` +
-        `chấm công / lương / task bị chia đôi.\n\n` +
-        `Nếu đây thực sự là 2 người khác nhau tình cờ trùng tên → bấm OK.\n` +
-        `Nếu không → bấm Cancel và dùng tài khoản cũ.`
-      );
-      if (!ok) throw new Error("Đã huỷ tạo tài khoản do trùng tên");
-    }
-  }
-
-  // ---- Tạo user qua client phụ ----
+   dùng một client phụ (không lưu session). Yêu cầu TẮT "Confirm email". */
+async function adminCreateUser(email, password, full_name, role) {
   const tmp = supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, storageKey: "eduhub-tmp" },
   });
   const { data, error } = await tmp.auth.signUp({
-    email: emailLc, password, options: { data: { full_name: nameTr, role } },
+    email, password, options: { data: { full_name, role } },
   });
-  await tmp.auth.signOut().catch(() => {});
   if (error) throw error;
+  await tmp.auth.signOut().catch(() => {});
   return data.user;
 }
 /* Người dùng tự đổi mật khẩu của chính mình */
@@ -4436,9 +2299,7 @@ function render() {
     "student-classes": studentClasses, "student-absence": studentAbsence, "student-grades": studentGrades,
     "biz-home": bizHome,
     "my-tasks": leaderTasks,
-    "my-att": leaderAttendance,
     "my-projects": guestProjects,
-    "my-notify": userNotifications,
   };
   const fn = map[v];
   if (!fn) return routeDefault();
@@ -4617,9 +2478,9 @@ function navItems() {
     ["admin-classes", "Lớp học", "🏫"], ["admin-regs", "Đăng ký", "📝"],
     ["biz-home", "Quản lý", "💼"],
   ];
-  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"], ["my-att", "Chấm công", "🕒"], ["my-notify", "Thông báo", "🔔"]];
+  if (r === "leader") return [["my-tasks", "Nhiệm vụ của tôi", "📋"]];
   if (r === "accountant") return [["biz-home", "Quản lý", "💼"]];
-  if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"], ["my-notify", "Thông báo", "🔔"]];
+  if (r === "gvhd" || r === "tg") return [["my-projects", "Dự án của tôi", "📁"]];
   if (r === "teacher") return [["teacher-classes", "Lớp của tôi", "🏫"]];
   return [["student-classes", "Lớp của tôi", "🏫"], ["student-grades", "Bảng điểm", "📊"], ["student-absence", "Xin phép vắng", "📅"]];
 }
@@ -4627,7 +2488,7 @@ function renderShell() {
   const items = navItems();
   const activeTop = state.view === "class" ? state.params._from : state.view;
   const nav = items.map(([v, label, ic]) =>
-    `<button class="navlink ${activeTop === v ? "active" : ""}" data-go="${v}"><span class="ic">${ic}</span>${esc(label)}${v === "my-notify" ? ' <span id="un-badge"></span>' : ""}</button>`
+    `<button class="navlink ${activeTop === v ? "active" : ""}" data-go="${v}"><span class="ic">${ic}</span>${esc(label)}</button>`
   ).join("");
   setHTML(`
     <div class="topbar">
@@ -4652,23 +2513,6 @@ function renderShell() {
   on('[data-go]', "click", (e) => { go(e.currentTarget.dataset.go); });
   document.getElementById("logout").onclick = doLogout;
   document.getElementById("changepw").onclick = () => openChangePassword();
-  // Badge thông báo chưa đọc / chưa đăng ký
-  if (["leader", "gvhd", "tg"].includes(state.profile.role)) {
-    (async () => {
-      const me = state.profile.id;
-      const [{ data: anns }, { data: resps }] = await Promise.all([
-        sb.from("biz_announcements").select("id,type").contains("recipient_ids", [me]),
-        sb.from("biz_announcement_responses").select("announcement_id,read_at,responded_at").eq("user_id", me),
-      ]);
-      const rmap = {}; (resps || []).forEach((r) => rmap[r.announcement_id] = r);
-      const n = (anns || []).filter((a) => {
-        const r = rmap[a.id];
-        return a.type === "schedule_signup" ? !(r && r.responded_at) : !(r && r.read_at);
-      }).length;
-      const el = document.getElementById("un-badge");
-      if (el && n > 0) el.innerHTML = `<span class="badge red" style="margin-left:4px">${n}</span>`;
-    })().catch(() => {});
-  }
   const sidebar = document.getElementById("sidebar"), bd = document.getElementById("bd");
   document.getElementById("burger").onclick = () => { sidebar.classList.add("open"); bd.classList.remove("hidden"); };
   bd.onclick = () => { sidebar.classList.remove("open"); bd.classList.add("hidden"); };
@@ -4939,46 +2783,11 @@ async function adminRegs() {
       </td>
     </tr>`).join("");
   setContent(`
-    <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <h2>Đăng ký</h2>
-      <button class="btn secondary" id="regs-csv" ${(data || []).length ? "" : "disabled"}>⬇ Xuất CSV (${(data || []).length})</button>
-    </div>
+    <div class="section-title"><h2>Đăng ký</h2></div>
     <div class="table-wrap"><table>
       <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
       <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
     </table></div>`);
-  const csvBtn = document.getElementById("regs-csv");
-  if (csvBtn) csvBtn.onclick = () => {
-    // Prefix "\t" trước số điện thoại để Excel giữ leading zero (không cắt số 0 đầu)
-    const kp = (v) => (v ? "\t" + v : "");
-    const regType = (r) => r.reg_type === "project" ? "Nghiên cứu dự án" : "Lớp học";
-    const roleOrClass = (r) => r.reg_type === "project"
-      ? (r.desired_role === "gvhd" ? "GV hướng dẫn" : "Tác giả")
-      : (r.course_name || "");
-    const computer = (v) => v === true ? "Có" : v === false ? "Không" : "";
-    const stt = { new: "Mới", contacted: "Đã liên hệ", enrolled: "Đã duyệt", rejected: "Từ chối" };
-    const header = ["STT", "Họ và tên", "Ngày sinh", "Khối", "Trường", "Loại đăng ký", "Lớp / Vai trò", "SĐT học viên", "SĐT phụ huynh", "Email", "Phường/Xã", "Tỉnh/TP", "Máy tính", "Ghi chú", "Trạng thái", "Ngày đăng ký"];
-    const body = (data || []).map((r, i) => [
-      i + 1,
-      r.full_name || "",
-      r.birth_date ? fmtDate(r.birth_date) : "",
-      r.grade || "",
-      r.school || "",
-      regType(r),
-      roleOrClass(r),
-      kp(r.phone),
-      kp(r.parent_phone),
-      r.email || "",
-      r.ward || "",
-      r.province || "",
-      computer(r.has_computer),
-      r.note || "",
-      stt[r.status] || r.status || "",
-      r.created_at ? fmtDate(r.created_at) : "",
-    ]);
-    const stamp = new Date().toISOString().slice(0, 10);
-    downloadCSV(`dang-ky-${stamp}.csv`, [header, ...body]);
-  };
   const regMap = {}; (data || []).forEach((r) => { regMap[r.id] = r; });
   on("[data-approve]", "click", (e) => approveRegToAccount(regMap[e.currentTarget.dataset.approve]));
   on("[data-delreg]", "click", async (e) => {
@@ -5000,28 +2809,12 @@ async function approveRegToAccount(reg) {
   const domain = role === "gvhd" ? "gvhd.bmt" : role === "tg" ? "tg.bmt" : STUDENT_DOMAIN;
   const roleLbl = role === "gvhd" ? "GV hướng dẫn" : role === "tg" ? "Tác giả (HS dự thi)" : "học sinh";
   if (!confirm(`Tạo tài khoản ${roleLbl} cho "${reg.full_name}"\nEmail đăng nhập: ${base}@${domain}` + (!isProj && reg.class_id ? `\nThêm vào lớp: ${reg.course_name || ""}` : "") + (isProj ? "\n(Sau khi tạo, vào Quản lý → Dự án → Chi tiết để phân công vào dự án.)" : "") + "?")) return;
-
-  // ---- Check trùng TÊN 1 lần trước khi vào vòng retry email ----
-  const { data: nameDups, error: ndErr } = await sb
-    .from("profiles").select("id,email,role")
-    .ilike("full_name", (reg.full_name || "").trim());
-  if (ndErr) return toast("Lỗi kiểm tra trùng tên: " + ndErr.message, "err");
-  if (nameDups && nameDups.length) {
-    const list = nameDups.map((d) => `• ${d.email || "(chưa có email)"} — ${d.role}`).join("\n");
-    if (!confirm(
-      `Đã có ${nameDups.length} tài khoản trùng tên "${reg.full_name}":\n${list}\n\n` +
-      `⚠ Tạo mới sẽ khiến cùng 1 người có nhiều hồ sơ, ` +
-      `chấm công / task sẽ bị chia. Vẫn tạo?`
-    )) return toast("Đã huỷ", "ok");
-  }
-
   const pass = Math.random().toString(36).slice(2, 10);
   let userId = null, email = `${base}@${domain}`, attempt = 0;
-  // Tạo tài khoản; nếu trùng email thì thêm số: vantam2, vantam3...
+  // Tạo tài khoản; nếu trùng email (trùng tên) thì thêm số: vantam2, vantam3...
   while (true) {
     try {
-      const u = await adminCreateUser(email, pass, reg.full_name, role,
-        { skipEmailCheck: true, allowDuplicateName: true });
+      const u = await adminCreateUser(email, pass, reg.full_name, role);
       userId = u && u.id; break;
     } catch (err) {
       if (/registered|already|exists/i.test(err.message || "")) {
