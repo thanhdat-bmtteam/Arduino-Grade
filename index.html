@@ -4955,6 +4955,10 @@ async function adminUsers() {
       <td><b>${esc(p.full_name || "—")}</b></td>
       <td class="meta">${esc(p.email)}</td>
       <td>${badgeRole(p.role)}</td>
+      <td class="meta" style="white-space:nowrap">
+        ${p.notify_email ? `📧 ${esc(p.notify_email)}` : '<span class="badge amber">chưa có</span>'}
+        <button class="btn ghost sm" data-notifyedit="${p.id}" data-email="${esc(p.notify_email || "")}" data-name="${esc(p.full_name || p.email)}" style="margin-left:4px">Sửa</button>
+      </td>
       <td>
         ${p.id !== state.profile.id
           ? `<button class="btn secondary sm" data-reset="${p.id}" data-email="${esc(p.email)}" data-name="${esc(p.full_name || p.email)}" data-role="${p.role}">Đặt lại MK</button>
@@ -4965,11 +4969,23 @@ async function adminUsers() {
   setContent(`
     <div class="section-title"><h2>Tài khoản</h2>
       <button class="btn" id="new-user">+ Tạo tài khoản</button></div>
+    <p class="meta" style="margin:0 0 10px">📧 <b>Mail nhận TB</b> là email cá nhân của user (gmail, outlook...) để nhận thông báo tự động. Khác với email đăng nhập.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Họ tên</th><th>Email</th><th>Vai trò</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="4" class="empty">Chưa có tài khoản</td></tr>`}</tbody>
+      <thead><tr><th>Họ tên</th><th>Email đăng nhập</th><th>Vai trò</th><th>Mail nhận TB</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="5" class="empty">Chưa có tài khoản</td></tr>`}</tbody>
     </table></div>`);
   document.getElementById("new-user").onclick = openCreateUser;
+  on("[data-notifyedit]", "click", async (e) => {
+    const d = e.currentTarget.dataset;
+    const cur = d.email || "";
+    const v = prompt(`Mail nhận TB cho ${d.name}:\n(VD: nguyenvana@gmail.com — để trống nếu muốn dùng email đăng nhập)`, cur);
+    if (v === null) return;
+    const val = v.trim() || null;
+    if (val && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) return toast("Email không hợp lệ", "err");
+    const { error } = await sb.from("profiles").update({ notify_email: val }).eq("id", d.notifyedit);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast(val ? "Đã lưu mail nhận TB" : "Đã xoá mail nhận TB", "ok"); adminUsers();
+  });
   on("[data-reset]", "click", async (e) => {
     const d = e.currentTarget.dataset;
     if (!confirm(`Đặt mật khẩu MỚI cho "${d.name}"?\nMật khẩu mới sẽ hiện ra để bạn copy gửi cho người dùng.`)) return;
