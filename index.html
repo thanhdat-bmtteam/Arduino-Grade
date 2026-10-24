@@ -4950,7 +4950,35 @@ async function adminUsers() {
   setContent(loadingHTML());
   const { data, error } = await sb.from("profiles").select("*").order("created_at", { ascending: false });
   if (error) return setContent(`<div class="empty">Lỗi tải: ${esc(error.message)}</div>`);
-  const rows = (data || []).map((p) => `
+  const all = data || [];
+  // Đếm số lượng mỗi role
+  const counts = {}; all.forEach((p) => { counts[p.role] = (counts[p.role] || 0) + 1; });
+  const roleOpts = [
+    ["", `Tất cả (${all.length})`],
+    ["admin", `Admin (${counts.admin || 0})`],
+    ["leader", `Leader (${counts.leader || 0})`],
+    ["gvhd", `GV hướng dẫn (${counts.gvhd || 0})`],
+    ["tg", `Tác giả (${counts.tg || 0})`],
+    ["teacher", `Giáo viên (${counts.teacher || 0})`],
+    ["student", `Học sinh (${counts.student || 0})`],
+    ["accountant", `Kế toán (${counts.accountant || 0})`],
+  ];
+  const curRole = state.params.au_role || "";
+  const curSearch = state.params.au_search || "";
+  const curNotify = state.params.au_notify || "";
+  // Filter
+  const filtered = all.filter((p) => {
+    if (curRole && p.role !== curRole) return false;
+    if (curNotify === "yes" && !p.notify_email) return false;
+    if (curNotify === "no" && p.notify_email) return false;
+    if (curSearch) {
+      const q = removeVN(curSearch).toLowerCase();
+      const hay = removeVN(`${p.full_name || ""} ${p.email || ""} ${p.notify_email || ""}`).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+  const rowHTML = (p) => `
     <tr>
       <td><b>${esc(p.full_name || "—")}</b></td>
       <td class="meta">${esc(p.email)}</td>
@@ -4965,16 +4993,36 @@ async function adminUsers() {
              <button class="btn danger sm" data-del="${p.id}" data-name="${esc(p.full_name || p.email)}">Khoá</button>`
           : `<span class="badge gray">Bạn</span>`}
       </td>
-    </tr>`).join("");
+    </tr>`;
+  const rows = filtered.map(rowHTML).join("");
   setContent(`
     <div class="section-title"><h2>Tài khoản</h2>
       <button class="btn" id="new-user">+ Tạo tài khoản</button></div>
     <p class="meta" style="margin:0 0 10px">📧 <b>Mail nhận TB</b> là email cá nhân của user (gmail, outlook...) để nhận thông báo tự động. Khác với email đăng nhập.</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:0 0 10px;align-items:center">
+      <select id="au-role" style="max-width:200px">
+        ${roleOpts.map(([v, l]) => `<option value="${v}" ${v === curRole ? "selected" : ""}>${esc(l)}</option>`).join("")}
+      </select>
+      <select id="au-notify" style="max-width:180px">
+        <option value="" ${curNotify === "" ? "selected" : ""}>Mail nhận TB: Tất cả</option>
+        <option value="yes" ${curNotify === "yes" ? "selected" : ""}>Đã có mail</option>
+        <option value="no" ${curNotify === "no" ? "selected" : ""}>Chưa có mail</option>
+      </select>
+      <input id="au-search" type="search" placeholder="🔍 Tìm tên, email..." value="${esc(curSearch)}" style="flex:1;min-width:200px;max-width:300px"/>
+      <span class="meta">Hiển thị <b>${filtered.length}</b>/${all.length}</span>
+    </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Họ tên</th><th>Email đăng nhập</th><th>Vai trò</th><th>Mail nhận TB</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5" class="empty">Chưa có tài khoản</td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="5" class="empty">Không có tài khoản nào khớp bộ lọc</td></tr>`}</tbody>
     </table></div>`);
   document.getElementById("new-user").onclick = openCreateUser;
+  document.getElementById("au-role").onchange = (e) => { state.params.au_role = e.target.value; adminUsers(); };
+  document.getElementById("au-notify").onchange = (e) => { state.params.au_notify = e.target.value; adminUsers(); };
+  let searchT;
+  document.getElementById("au-search").oninput = (e) => {
+    clearTimeout(searchT);
+    searchT = setTimeout(() => { state.params.au_search = e.target.value; adminUsers(); }, 250);
+  };
   on("[data-notifyedit]", "click", async (e) => {
     const d = e.currentTarget.dataset;
     const cur = d.email || "";
@@ -5177,7 +5225,30 @@ async function adminRegs() {
   setContent(loadingHTML());
   const { data } = await sb.from("course_registrations").select("*").order("created_at", { ascending: false });
   const stt = { new: ["Mới", "amber"], contacted: ["Đã liên hệ", "blue"], enrolled: ["Đã duyệt", "green"], rejected: ["Từ chối", "gray"] };
-  const rows = (data || []).map((r) => `
+  const all = data || [];
+  // Phân loại cho dropdown
+  const typeOf = (r) => r.reg_type === "project" ? (r.desired_role === "gvhd" ? "project_gvhd" : "project_tg") : "class";
+  const cnt = { all: all.length, project_gvhd: 0, project_tg: 0, class: 0 };
+  all.forEach((r) => { cnt[typeOf(r)]++; });
+  const sttCnt = {};
+  all.forEach((r) => { sttCnt[r.status] = (sttCnt[r.status] || 0) + 1; });
+
+  const curType = state.params.rg_type || "";
+  const curStatus = state.params.rg_status || "";
+  const curSearch = state.params.rg_search || "";
+
+  const filtered = all.filter((r) => {
+    if (curType && typeOf(r) !== curType) return false;
+    if (curStatus && r.status !== curStatus) return false;
+    if (curSearch) {
+      const q = removeVN(curSearch).toLowerCase();
+      const hay = removeVN(`${r.full_name || ""} ${r.email || ""} ${r.phone || ""} ${r.parent_phone || ""} ${r.school || ""} ${r.course_name || ""}`).toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  const rowHTML = (r) => `
     <tr>
       <td><b>${esc(r.full_name)}</b>
         <div class="meta">${r.birth_date ? "NS: " + fmtDate(r.birth_date) + " • " : ""}${r.grade ? "Khối " + esc(r.grade) : ""}</div>
@@ -5194,16 +5265,49 @@ async function adminRegs() {
              <button class="btn ghost sm" data-delreg="${r.id}" data-name="${esc(r.full_name)}">Xoá</button>`
           : `<button class="btn ghost sm" data-delreg="${r.id}" data-name="${esc(r.full_name)}">Xoá</button>`}
       </td>
-    </tr>`).join("");
+    </tr>`;
+  const rows = filtered.map(rowHTML).join("");
+
+  const typeOpts = [
+    ["", `Tất cả loại (${cnt.all})`],
+    ["project_tg", `📝 Dự án · Tác giả (${cnt.project_tg})`],
+    ["project_gvhd", `🎓 Dự án · GVHD (${cnt.project_gvhd})`],
+    ["class", `🏫 Lớp học (${cnt.class})`],
+  ];
+  const sttOpts = [
+    ["", "Mọi trạng thái"],
+    ["new", `Mới (${sttCnt.new || 0})`],
+    ["contacted", `Đã liên hệ (${sttCnt.contacted || 0})`],
+    ["enrolled", `Đã duyệt (${sttCnt.enrolled || 0})`],
+    ["rejected", `Từ chối (${sttCnt.rejected || 0})`],
+  ];
+
   setContent(`
     <div class="section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <h2>Đăng ký</h2>
-      <button class="btn secondary" id="regs-csv" ${(data || []).length ? "" : "disabled"}>⬇ Xuất CSV (${(data || []).length})</button>
+      <button class="btn secondary" id="regs-csv" ${filtered.length ? "" : "disabled"}>⬇ Xuất CSV (${filtered.length})</button>
+    </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin:0 0 10px;align-items:center">
+      <select id="rg-type" style="max-width:230px">
+        ${typeOpts.map(([v, l]) => `<option value="${v}" ${v === curType ? "selected" : ""}>${esc(l)}</option>`).join("")}
+      </select>
+      <select id="rg-status" style="max-width:170px">
+        ${sttOpts.map(([v, l]) => `<option value="${v}" ${v === curStatus ? "selected" : ""}>${esc(l)}</option>`).join("")}
+      </select>
+      <input id="rg-search" type="search" placeholder="🔍 Tìm tên, SĐT, trường..." value="${esc(curSearch)}" style="flex:1;min-width:200px;max-width:300px"/>
+      <span class="meta">Hiển thị <b>${filtered.length}</b>/${all.length}</span>
     </div>
     <div class="table-wrap"><table>
       <thead><tr><th>Học viên</th><th>Liên hệ</th><th>Địa chỉ</th><th>Máy tính</th><th>Ghi chú</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="7" class="empty">Chưa có đăng ký nào</td></tr>`}</tbody>
+      <tbody>${rows || `<tr><td colspan="7" class="empty">Không có đăng ký nào khớp bộ lọc</td></tr>`}</tbody>
     </table></div>`);
+  document.getElementById("rg-type").onchange = (e) => { state.params.rg_type = e.target.value; adminRegs(); };
+  document.getElementById("rg-status").onchange = (e) => { state.params.rg_status = e.target.value; adminRegs(); };
+  let rgT;
+  document.getElementById("rg-search").oninput = (e) => {
+    clearTimeout(rgT);
+    rgT = setTimeout(() => { state.params.rg_search = e.target.value; adminRegs(); }, 250);
+  };
   const csvBtn = document.getElementById("regs-csv");
   if (csvBtn) csvBtn.onclick = () => {
     // Prefix "\t" trước số điện thoại để Excel giữ leading zero (không cắt số 0 đầu)
@@ -5215,7 +5319,7 @@ async function adminRegs() {
     const computer = (v) => v === true ? "Có" : v === false ? "Không" : "";
     const stt = { new: "Mới", contacted: "Đã liên hệ", enrolled: "Đã duyệt", rejected: "Từ chối" };
     const header = ["STT", "Họ và tên", "Ngày sinh", "Khối", "Trường", "Loại đăng ký", "Lớp / Vai trò", "SĐT học viên", "SĐT phụ huynh", "Email", "Phường/Xã", "Tỉnh/TP", "Máy tính", "Ghi chú", "Trạng thái", "Ngày đăng ký"];
-    const body = (data || []).map((r, i) => [
+    const body = filtered.map((r, i) => [
       i + 1,
       r.full_name || "",
       r.birth_date ? fmtDate(r.birth_date) : "",
