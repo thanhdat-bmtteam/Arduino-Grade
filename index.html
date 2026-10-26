@@ -558,12 +558,26 @@ async function leaderAttendance() {
   setContent(`<div class="section-title"><h2>Chấm công</h2></div><div id="att-body">${loadingHTML()}</div>`);
   const me = state.profile.id;
   const rates = await getAttRates();
-  const { data: rows } = await sb.from("biz_attendance").select("*").eq("leader_id", me).order("work_date", { ascending: false }).order("start_time", { ascending: false });
+  // Load lịch chấm công + sự kiện ngoại khoá mà leader được tham gia
+  const [{ data: rows }, { data: events }, { data: myProfile }] = await Promise.all([
+    sb.from("biz_attendance").select("*").eq("leader_id", me).order("work_date", { ascending: false }).order("start_time", { ascending: false }),
+    sb.from("biz_offsite_events").select("*").contains("participant_ids", [me]).order("work_date", { ascending: false }),
+    sb.from("profiles").select("fingerprint_id").eq("id", me).maybeSingle(),
+  ]);
   const list = rows || [];
   // Tìm ca đang mở (end_time null)
   const openShift = list.find((x) => !x.end_time);
   // Chỉ hiển thị ca đã đóng trong bảng history
   const closedList = list.filter((x) => x.end_time);
+  const hasFingerprint = !!(myProfile && myProfile.fingerprint_id);
+  // Lọc event: chỉ hiện event trong 30 ngày gần đây + chưa confirm
+  const confirmedSet = new Set(list.filter((x) => x.source === "offsite" && x.offsite_event_id).map((x) => x.offsite_event_id));
+  // Fallback nếu chưa có cột offsite_event_id — match bằng work_date + start_time
+  const confirmedByDateTime = new Set(list.filter((x) => x.source === "offsite").map((x) => `${x.work_date}|${(x.start_time || "").slice(0, 5)}`));
+  const recentEvents = (events || []).filter((e) => {
+    const d = new Date(e.work_date);
+    return (Date.now() - d.getTime()) / 86400000 <= 30;
+  });
   // Gom theo tháng
   const byMonth = {};
   closedList.forEach((x) => { const k = (x.work_date || "").slice(0, 7); (byMonth[k] = byMonth[k] || []).push(x); });
@@ -580,68 +594,72 @@ async function leaderAttendance() {
     const unpaidMoney = totalMoney - paidMoney;
     const trows = items.map((x) => {
       const isPaidRow = x.status === "approved" && x.paid;
-      const gpsIn = (x.lat != null && x.lng != null)
-        ? `<a href="https://www.google.com/maps?q=${x.lat},${x.lng}" target="_blank" rel="noopener" title="Vào ca: ${x.lat.toFixed(5)}, ${x.lng.toFixed(5)}">📍 Vào</a>`
-        : '<span class="meta">—</span>';
-      const gpsOut = (x.lat_out != null && x.lng_out != null)
-        ? ` · <a href="https://www.google.com/maps?q=${x.lat_out},${x.lng_out}" target="_blank" rel="noopener" title="Tan ca: ${x.lat_out.toFixed(5)}, ${x.lng_out.toFixed(5)}">📍 Tan</a>`
-        : '';
+      const sourceLabel = x.source === "fingerprint" ? '<span class="badge blue">👆 Vân tay</span>'
+        : x.source === "offsite" ? '<span class="badge amber">🏢 Ngoại khoá</span>'
+        : '<span class="badge gray">Thủ công</span>';
       return `<tr${isPaidRow ? ' class="att-paid-row"' : ""}>
       <td>${fmtDate(x.work_date)}</td>
       <td>${x.start_time.slice(0, 5)} – ${x.end_time.slice(0, 5)}</td>
+      <td>${sourceLabel}</td>
       <td>${transportLabel(x.transport)}</td>
       <td>${attStatusBadge(x.status)}${isPaidRow ? ' <span class="badge green">Đã CK</span>' : ""}</td>
-      <td>${gpsIn}${gpsOut}</td>
-      <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td>
-      <td>${x.status === "pending" ? `<button class="btn danger sm" data-attdel="${x.id}">✕</button>` : ""}</td></tr>`;
+      <td>${x.admin_note ? `<span class="meta">💬 ${esc(x.admin_note)}</span>` : ""}</td></tr>`;
     }).join("");
     return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px">
         <b>Tháng ${m.split("-").reverse().join("/")}</b>
         <span class="meta">Ngày công đã duyệt: <b>${approved.length}</b> (${nCaNhan} xe cá nhân + ${nXeOm} xe ôm) · Phụ cấp: <b>${fmtVND(totalMoney)}</b> (đã CK: ${fmtVND(paidMoney)}${unpaidMoney > 0 ? ", chưa CK: " + fmtVND(unpaidMoney) : ""})</span></div>
       <div class="table-wrap" style="margin-top:8px"><table style="table-layout:fixed;width:100%">
-        <colgroup><col style="width:12%"><col style="width:16%"><col style="width:14%"><col style="width:14%"><col style="width:16%"><col style="width:20%"><col style="width:8%"></colgroup>
-        <thead><tr><th>Ngày</th><th>Giờ</th><th>Phương tiện</th><th>Trạng thái</th><th>Vị trí</th><th>Ghi chú Admin</th><th></th></tr></thead>
+        <colgroup><col style="width:14%"><col style="width:18%"><col style="width:16%"><col style="width:16%"><col style="width:16%"><col style="width:20%"></colgroup>
+        <thead><tr><th>Ngày</th><th>Giờ</th><th>Nguồn</th><th>Phương tiện</th><th>Trạng thái</th><th>Ghi chú Admin</th></tr></thead>
         <tbody>${trows}</tbody></table></div></div>`;
   }).join("");
 
-  // Panel vào ca / tan ca
-  let actionPanel;
-  if (openShift) {
+  // Panel trạng thái vân tay
+  let fpPanel;
+  if (!hasFingerprint) {
+    fpPanel = `<div class="card" style="border:2px solid var(--red);background:#fef2f2">
+      <div style="font-weight:700;font-size:1.05rem">⚠ Chưa đăng ký vân tay</div>
+      <p class="meta" style="margin:4px 0">Bạn chưa được admin enroll vân tay. Liên hệ admin để quét vân tay tại văn phòng, không chấm công được qua máy quét.</p>
+    </div>`;
+  } else if (openShift) {
     const startMs = new Date(openShift.work_date + "T" + openShift.start_time).getTime();
     const elapsed = (Date.now() - startMs) / 3600000;
-    actionPanel = `
-      <div class="card" style="border:2px solid var(--amber);background:#fef8ec">
-        <div style="font-weight:700;font-size:1.05rem">⏱ Đang trong ca</div>
-        <p class="meta" style="margin:6px 0">Vào ca lúc: <b>${fmtDate(openShift.work_date)} ${openShift.start_time.slice(0,5)}</b> · Phương tiện: <b>${transportLabel(openShift.transport)}</b>${openShift.note ? " · Ghi chú: " + esc(openShift.note) : ""}</p>
-        ${openShift.lat != null ? `<p class="meta" style="margin:4px 0">📍 Vị trí vào ca: <a href="https://www.google.com/maps?q=${openShift.lat},${openShift.lng}" target="_blank" rel="noopener">${openShift.lat.toFixed(5)}, ${openShift.lng.toFixed(5)}</a></p>` : ''}
-        <p class="meta" style="margin:4px 0">Đã làm: <b>${elapsed.toFixed(1)}h</b>${elapsed > 12 ? ' <span style="color:var(--red)">⚠ Ca kéo dài quá 12h — nếu bạn quên tan ca, hãy bấm "Huỷ ca" và vào ca lại.</span>' : ''}</p>
-        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
-          <button class="btn ghost sm" id="att-gps-out" type="button">📍 Lấy định vị GPS</button>
-          <span id="att-gps-status-out" class="meta">Chưa có GPS — bắt buộc trước khi tan ca</span>
-          <button class="btn danger" id="att-cancel-shift" type="button">Huỷ ca</button>
-          <button class="btn success" id="att-clock-out" type="button" style="margin-left:auto">🔴 Tan ca</button>
-        </div>
-      </div>`;
+    fpPanel = `<div class="card" style="border:2px solid var(--amber);background:#fef8ec">
+      <div style="font-weight:700;font-size:1.05rem">⏱ Đang trong ca (vân tay)</div>
+      <p class="meta" style="margin:6px 0">Vào ca lúc: <b>${fmtDate(openShift.work_date)} ${openShift.start_time.slice(0,5)}</b> · Đã làm: <b>${elapsed.toFixed(1)}h</b></p>
+      <p class="meta">Để tan ca, hãy ra máy quét vân tay tại văn phòng và quét 1 lần nữa.</p>
+    </div>`;
   } else {
-    actionPanel = `
-      <div class="card">
-        <div style="font-weight:700;font-size:1.05rem">Vào ca</div>
-        <p class="meta" style="margin:4px 0 8px">Bấm nút khi bắt đầu làm việc — hệ thống sẽ ghi lại <b>thời gian hiện tại</b> và <b>vị trí GPS</b>. Khi về, bấm "Tan ca" để kết thúc. Phụ cấp: <b>Xe cá nhân ${fmtVND(rates.ca_nhan)}/ngày</b> · <b>Xe ôm công nghệ ${fmtVND(rates.xe_om)}/ngày</b>. Thời gian làm phải ≥ 2h mới được tính 1 ngày công.<br>📍 Chỗ làm cho phép GPS trong phạm vi <b>${WORK_RADIUS_M}m</b>. Nếu vào ca VÀ tan ca đều trong phạm vi → tự động duyệt, ngoài phạm vi → chờ Admin duyệt tay.</p>
-        <div class="row" style="align-items:flex-end;gap:6px;flex-wrap:wrap">
-          <div class="field" style="max-width:220px;margin:0"><label>Phương tiện</label><select id="att-transport"><option value="ca_nhan">Xe cá nhân (${fmtVND(rates.ca_nhan)})</option><option value="xe_om">Xe ôm công nghệ (${fmtVND(rates.xe_om)})</option></select></div>
-          <div class="field" style="flex:1;min-width:180px;margin:0"><label>Ghi chú (không bắt buộc)</label><input id="att-note" placeholder="Làm gì hôm nay"/></div>
-        </div>
-        <div class="row" style="align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
-          <button class="btn ghost sm" id="att-gps" type="button">📍 Lấy định vị GPS</button>
-          <span id="att-gps-status" class="meta">Chưa có GPS — bắt buộc trước khi vào ca</span>
-          <button class="btn success" id="att-clock-in" type="button" style="margin-left:auto">🔵 Vào ca</button>
-        </div>
-      </div>`;
+    fpPanel = `<div class="card" style="background:#f0fdf4;border:1px solid var(--green)">
+      <div style="font-weight:700;font-size:1.05rem">✓ Vân tay đã sẵn sàng</div>
+      <p class="meta" style="margin:4px 0">Đến VP → quét vân tay để <b>vào ca</b>. Khi về → quét lần nữa để <b>tan ca</b>. Thời gian làm ≥ 2h sẽ tự động duyệt.</p>
+    </div>`;
+  }
+
+  // Panel sự kiện ngoại khoá
+  const pendingEvents = recentEvents.filter((e) => !confirmedByDateTime.has(`${e.work_date}|${e.start_time.slice(0, 5)}`));
+  let eventPanel = "";
+  if (pendingEvents.length) {
+    eventPanel = `<div class="card" style="border:2px solid var(--blue-d);background:#eff6ff">
+      <div style="font-weight:700;font-size:1.05rem">🏢 Sự kiện ngoại khoá cần xác nhận</div>
+      <p class="meta" style="margin:4px 0 8px">Admin đã tạo ${pendingEvents.length} sự kiện ngoại khoá bạn có tham gia. Bấm "✓ Có tham gia" để được tính công.</p>
+      ${pendingEvents.map((e) => {
+        const dur = attDuration(e.start_time, e.end_time);
+        return `<div class="row" style="justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);gap:8px;flex-wrap:wrap">
+          <div style="min-width:0;flex:1">
+            <div><b>${esc(e.title)}</b></div>
+            <div class="meta">${fmtDate(e.work_date)} · ${e.start_time.slice(0,5)}–${e.end_time.slice(0,5)} (${dur.toFixed(1)}h) · ${transportLabel(e.transport)}${e.note ? " · " + esc(e.note) : ""}</div>
+          </div>
+          <button class="btn success sm" data-evconfirm="${e.id}">✓ Có tham gia</button>
+        </div>`;
+      }).join("")}
+    </div>`;
   }
 
   document.getElementById("att-body").innerHTML = `
     <style>.att-paid-row.hidden{display:none}</style>
-    ${actionPanel}
+    ${fpPanel}
+    ${eventPanel}
     ${nPaid > 0 ? `<div style="margin:10px 0"><button class="btn ghost sm" id="att-toggle-paid">👁 Hiện ${nPaid} ngày đã CK</button></div>` : ""}
     ${monthCards || `<div class="empty"><div class="em">🕒</div><p>Chưa có ngày công nào.</p></div>`}`;
   // Mặc định ẩn ngày đã CK
@@ -655,119 +673,26 @@ async function leaderAttendance() {
       togBtn.textContent = shown ? `🙈 Ẩn ${nPaid} ngày đã CK` : `👁 Hiện ${nPaid} ngày đã CK`;
     };
   }
-  // Helper GPS chung
-  const setupGPS = (btnId, statusId) => {
-    const state = { loc: null };
-    const btn = document.getElementById(btnId);
-    const statusEl = document.getElementById(statusId);
-    if (!btn) return state;
-    btn.onclick = async (e) => {
-      if (!navigator.geolocation) { statusEl.innerHTML = '<span style="color:var(--red)">Trình duyệt không hỗ trợ GPS</span>'; return; }
-      e.target.disabled = true;
-      statusEl.textContent = "⏳ Đang lấy GPS (lần 1/3)...";
-      // Lấy GPS 3 lần cách nhau 1.5s để check nhất quán → chống fake GPS cố định
-      const getOne = () => new Promise((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({
-            lat: pos.coords.latitude, lng: pos.coords.longitude,
-            acc: pos.coords.accuracy, alt: pos.coords.altitude,
-            spd: pos.coords.speed, hdg: pos.coords.heading,
-            t: Date.now(),
-          }),
-          reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
-        );
-      });
-      try {
-        const samples = [];
-        for (let i = 0; i < 3; i++) {
-          if (i > 0) {
-            statusEl.textContent = `⏳ Đang lấy GPS (lần ${i+1}/3)...`;
-            await new Promise((r) => setTimeout(r, 1500));
-          }
-          samples.push(await getOne());
-        }
-        const avgLat = samples.reduce((s, x) => s + x.lat, 0) / samples.length;
-        const avgLng = samples.reduce((s, x) => s + x.lng, 0) / samples.length;
-        const avgAcc = samples.reduce((s, x) => s + x.acc, 0) / samples.length;
-        // Flag nghi fake: nếu 3 lần toạ độ KHÔNG THAY ĐỔI 1 chút nào (fake GPS fix cứng) → cảnh báo
-        const latSpread = Math.max(...samples.map((s) => s.lat)) - Math.min(...samples.map((s) => s.lat));
-        const lngSpread = Math.max(...samples.map((s) => s.lng)) - Math.min(...samples.map((s) => s.lng));
-        const identical = latSpread === 0 && lngSpread === 0;
-        // Accuracy quá đẹp (< 3m trên web browser) cũng nghi fake
-        const tooAccurate = avgAcc < 3;
-        // Có altitude/speed/heading null hoàn toàn thì bình thường trên browser, không đáng ngờ
-        const suspect = identical || tooAccurate;
-        state.loc = { lat: avgLat, lng: avgLng, acc: avgAcc, suspect };
-        const distM = distanceMeters(avgLat, avgLng, WORK_LOCATION.lat, WORK_LOCATION.lng);
-        const inRange = distM <= WORK_RADIUS_M;
-        state.loc.distance = distM;
-        state.loc.inRange = inRange;
-        const sStyle = suspect ? "color:var(--amber)" : (inRange ? "color:var(--green)" : "color:var(--amber)");
-        statusEl.innerHTML = `<span style="${sStyle}">✓ ${avgLat.toFixed(5)}, ${avgLng.toFixed(5)}</span> · độ chính xác ~${Math.round(avgAcc)}m · cách chỗ làm <b>${distM < 1000 ? Math.round(distM) + "m" : (distM/1000).toFixed(2) + "km"}</b> ${inRange ? '<span class="badge green">✓ Trong phạm vi</span>' : '<span class="badge amber">⚠ Ngoài phạm vi — cần chờ duyệt</span>'}${suspect ? ' <span class="badge red">⚠ Nghi fake GPS</span>' : ""}`;
-        e.target.disabled = false;
-        e.target.textContent = "📍 Lấy lại GPS";
-      } catch (err) {
-        statusEl.innerHTML = `<span style="color:var(--red)">❌ ${err.message || "Lỗi lấy GPS"} — cần bật quyền định vị</span>`;
-        e.target.disabled = false;
-      }
-    };
-    return state;
-  };
-
-  if (openShift) {
-    // === TAN CA ===
-    const gps = setupGPS("att-gps-out", "att-gps-status-out");
-    document.getElementById("att-clock-out").onclick = async (e) => {
-      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi tan ca', "err");
-      const now = new Date();
-      const elapsed = (now.getTime() - new Date(openShift.work_date + "T" + openShift.start_time).getTime()) / 3600000;
-      if (elapsed > 12 && !confirm(`Ca đã mở ${elapsed.toFixed(1)}h — khá dài. Chắc chắn tan ca với thời gian hiện tại?`)) return;
-      const nowTime = now.toTimeString().slice(0, 8);
-      // Auto-duyệt khi cả vào ca VÀ tan ca đều trong phạm vi + không nghi fake
-      const inRangeIn = openShift.lat != null && distanceMeters(openShift.lat, openShift.lng, WORK_LOCATION.lat, WORK_LOCATION.lng) <= WORK_RADIUS_M;
-      const inRangeOut = gps.loc.inRange;
-      const canAuto = inRangeIn && inRangeOut && !gps.loc.suspect;
-      e.target.disabled = true;
-      const upd = {
-        end_time: nowTime,
-        lat_out: gps.loc.lat, lng_out: gps.loc.lng, loc_at_out: now.toISOString(),
-      };
-      if (canAuto) { upd.status = "approved"; upd.admin_note = `✓ Tự động duyệt (GPS trong phạm vi ${WORK_RADIUS_M}m)`; }
-      const { error } = await sb.from("biz_attendance").update(upd).eq("id", openShift.id);
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-      toast(canAuto ? `✓ Đã tan ca sau ${elapsed.toFixed(1)}h — tự động duyệt.` : `Đã tan ca sau ${elapsed.toFixed(1)}h. Chờ Admin duyệt (${!inRangeOut ? "ngoài phạm vi" : gps.loc.suspect ? "nghi fake GPS" : "vào ca ngoài phạm vi"}).`, canAuto ? "ok" : "err");
-      leaderAttendance();
-    };
-    document.getElementById("att-cancel-shift").onclick = async () => {
-      if (!confirm("Huỷ ca này? Dữ liệu vào ca (bao gồm GPS) sẽ bị xoá vĩnh viễn.")) return;
-      const { error } = await sb.from("biz_attendance").delete().eq("id", openShift.id);
-      if (error) return toast("Lỗi: " + error.message, "err");
-      toast("Đã huỷ ca", "ok"); leaderAttendance();
-    };
-  } else {
-    // === VÀO CA ===
-    const gps = setupGPS("att-gps", "att-gps-status");
-    document.getElementById("att-clock-in").onclick = async (e) => {
-      if (!gps.loc) return toast('Phải bấm "Lấy định vị GPS" trước khi vào ca', "err");
-      const now = new Date();
-      const nowDate = now.toISOString().slice(0, 10);
-      const nowTime = now.toTimeString().slice(0, 8);
-      e.target.disabled = true;
-      const { error } = await sb.from("biz_attendance").insert({
-        leader_id: me, work_date: nowDate, start_time: nowTime, end_time: null,
-        transport: document.getElementById("att-transport").value,
-        note: document.getElementById("att-note").value.trim(),
-        lat: gps.loc.lat, lng: gps.loc.lng, loc_at: now.toISOString(),
-      });
-      if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
-      toast(`Đã vào ca lúc ${nowTime.slice(0,5)}`, "ok"); leaderAttendance();
-    };
-  }
-  on("[data-attdel]", "click", async (e) => {
-    if (!confirm("Xoá khai báo này?")) return;
-    const { error } = await sb.from("biz_attendance").delete().eq("id", e.currentTarget.dataset.attdel);
-    if (error) return toast("Lỗi: " + error.message, "err");
-    toast("Đã xoá", "ok"); leaderAttendance();
+  // Confirm sự kiện ngoại khoá → tạo biz_attendance
+  on("[data-evconfirm]", "click", async (e) => {
+    const btn = e.currentTarget;
+    const ev = recentEvents.find((x) => x.id === btn.dataset.evconfirm);
+    if (!ev) return;
+    if (!confirm(`Xác nhận bạn ĐÃ tham gia sự kiện "${ev.title}" ngày ${fmtDate(ev.work_date)} từ ${ev.start_time.slice(0,5)}–${ev.end_time.slice(0,5)}?\nSau khi xác nhận không sửa được.`)) return;
+    btn.disabled = true;
+    const { error } = await sb.from("biz_attendance").insert({
+      leader_id: me,
+      work_date: ev.work_date,
+      start_time: ev.start_time,
+      end_time: ev.end_time,
+      transport: ev.transport || "ca_nhan",
+      status: "approved",
+      source: "offsite",
+      note: `Ngoại khoá: ${ev.title}`,
+      admin_note: "✓ Tự động duyệt (ngoại khoá, do admin tạo)",
+    });
+    if (error) { toast("Lỗi: " + error.message, "err"); btn.disabled = false; return; }
+    toast("✓ Đã xác nhận tham gia — tính 1 ngày công", "ok"); leaderAttendance();
   });
 }
 
@@ -985,6 +910,12 @@ async function bizAttendance() {
 
       <button class="btn secondary sm" id="att-rates">
         ⚙ Đơn giá phụ cấp
+      </button>
+      <button class="btn secondary sm" id="att-offsite">
+        🏢 Tạo sự kiện ngoại khoá
+      </button>
+      <button class="btn secondary sm" id="att-enroll">
+        👆 Enroll vân tay
       </button>
     </div>
 
@@ -1305,6 +1236,8 @@ async function bizAttendance() {
 
   document.getElementById("att-rates").onclick =
     () => openAttRatesModal(rates);
+  document.getElementById("att-offsite").onclick = () => openOffsiteEventModal();
+  document.getElementById("att-enroll").onclick = () => openFingerprintEnrollModal();
 
   // ===========================
   // TOGGLE ẨN/HIỆN ĐÃ CK
@@ -1452,6 +1385,118 @@ async function openAttRatesModal(rates) {
     if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
     toast("Đã lưu", "ok"); closeModal(); bizAttendance();
   };
+}
+
+/* ---------- Modal tạo sự kiện ngoại khoá ---------- */
+async function openOffsiteEventModal() {
+  const { data: leaders } = await sb.from("profiles").select("id,full_name").eq("role", "leader").order("full_name");
+  const today = new Date().toISOString().slice(0, 10);
+  const leaderCheckboxes = (leaders || []).map((l) =>
+    `<label style="display:flex;gap:6px;align-items:center;cursor:pointer;padding:4px 0"><input type="checkbox" class="ev-leader" value="${l.id}"/> ${esc(l.full_name)}</label>`
+  ).join("");
+  showModal("🏢 Tạo sự kiện ngoại khoá", `
+    <div class="field"><label>Tên sự kiện *</label><input id="ev-title" placeholder="VD: Hội thảo công nghệ"/></div>
+    <div class="row">
+      <div class="field" style="max-width:160px"><label>Ngày *</label><input id="ev-date" type="date" value="${today}"/></div>
+      <div class="field" style="max-width:120px"><label>Giờ bắt đầu *</label><input id="ev-start" type="time" value="08:00"/></div>
+      <div class="field" style="max-width:120px"><label>Giờ kết thúc *</label><input id="ev-end" type="time" value="11:00"/></div>
+    </div>
+    <div class="field"><label>Phương tiện (phụ cấp)</label>
+      <select id="ev-transport"><option value="ca_nhan">Xe cá nhân</option><option value="xe_om">Xe ôm công nghệ</option></select>
+    </div>
+    <div class="field"><label>Ghi chú</label><input id="ev-note" placeholder="Mô tả thêm (không bắt buộc)"/></div>
+    <div class="field"><label>Nhân viên tham gia * <span id="ev-count" style="color:var(--blue-d)">(0 đã chọn)</span></label>
+      <div style="margin-bottom:6px">
+        <button type="button" class="btn ghost sm" id="ev-all">Chọn tất cả</button>
+        <button type="button" class="btn ghost sm" id="ev-none">Bỏ chọn</button>
+      </div>
+      <div style="max-height:220px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:8px">${leaderCheckboxes || '<p class="meta">Chưa có Leader nào</p>'}</div>
+    </div>
+    <div class="help">Sau khi tạo, các Leader được chọn sẽ thấy sự kiện này trong tab Chấm công và bấm "Có tham gia" để được tính 1 ngày công tự động.</div>`,
+    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="ev-save">Tạo</button>`);
+  const upd = () => {
+    const n = document.querySelectorAll(".ev-leader:checked").length;
+    document.getElementById("ev-count").textContent = `(${n} đã chọn)`;
+  };
+  upd();
+  modalRoot().addEventListener("change", (e) => { if (e.target.matches(".ev-leader")) upd(); });
+  document.getElementById("ev-all").onclick = () => { document.querySelectorAll(".ev-leader").forEach((c) => c.checked = true); upd(); };
+  document.getElementById("ev-none").onclick = () => { document.querySelectorAll(".ev-leader").forEach((c) => c.checked = false); upd(); };
+  document.getElementById("ev-save").onclick = async (e) => {
+    const title = document.getElementById("ev-title").value.trim();
+    const date = document.getElementById("ev-date").value;
+    const start = document.getElementById("ev-start").value;
+    const end = document.getElementById("ev-end").value;
+    const ids = [...document.querySelectorAll(".ev-leader:checked")].map((c) => c.value);
+    if (!title) return toast("Nhập tên sự kiện", "err");
+    if (!date || !start || !end) return toast("Chọn ngày và giờ", "err");
+    const dur = attDuration(start, end);
+    if (Number.isNaN(dur) || dur < 2) return toast("Thời gian làm phải ≥ 2h", "err");
+    if (!ids.length) return toast("Chọn ít nhất 1 Leader tham gia", "err");
+    e.target.disabled = true;
+    const { error } = await sb.from("biz_offsite_events").insert({
+      title, work_date: date, start_time: start, end_time: end,
+      transport: document.getElementById("ev-transport").value,
+      participant_ids: ids,
+      note: document.getElementById("ev-note").value.trim(),
+      created_by: state.profile.id,
+    });
+    if (error) { toast("Lỗi: " + error.message, "err"); e.target.disabled = false; return; }
+    toast(`Đã tạo sự kiện cho ${ids.length} leader`, "ok"); closeModal(); bizAttendance();
+  };
+}
+
+/* ---------- Modal enroll vân tay ---------- */
+async function openFingerprintEnrollModal() {
+  const { data: leaders } = await sb.from("profiles").select("id,full_name,fingerprint_id").eq("role", "leader").order("full_name");
+  const { data: pending } = await sb.from("biz_fingerprint_enroll_requests").select("*,profiles(full_name)").eq("status", "pending").order("created_at");
+  const rows = (leaders || []).map((l) => `
+    <tr>
+      <td><b>${esc(l.full_name || "?")}</b></td>
+      <td class="meta">${l.fingerprint_id ? `ID: <b>${l.fingerprint_id}</b>` : '<span class="badge amber">Chưa có</span>'}</td>
+      <td>
+        <button class="btn ${l.fingerprint_id ? "ghost" : "success"} sm" data-fpenr="${l.id}" data-name="${esc(l.full_name)}">${l.fingerprint_id ? "🔄 Enroll lại" : "👆 Enroll"}</button>
+        ${l.fingerprint_id ? `<button class="btn danger sm" data-fpdel="${l.id}" data-name="${esc(l.full_name)}">Xoá vân tay</button>` : ""}
+      </td>
+    </tr>`).join("");
+  const pendingRows = (pending || []).map((p) => `
+    <tr>
+      <td>${esc((p.profiles && p.profiles.full_name) || "?")}</td>
+      <td class="meta">${fmtDT(p.created_at)}</td>
+      <td><button class="btn danger sm" data-fpcancel="${p.id}">Huỷ</button></td>
+    </tr>`).join("");
+  showModal("👆 Enroll vân tay", `
+    <p class="meta">1. Bấm <b>Enroll</b> ở leader cần đăng ký → tạo yêu cầu<br>2. Leader đến máy quét vân tay tại VP (ESP32 sẽ nhận yêu cầu trong vài giây)<br>3. Đặt tay 2 lần theo hướng dẫn trên LCD<br>4. Máy báo thành công → vân tay được lưu, tự động xác nhận.</p>
+    <h3 style="font-size:14px;margin:14px 0 6px">Danh sách Leader</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Họ tên</th><th>Trạng thái vân tay</th><th>Thao tác</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="3" class="empty">Chưa có Leader</td></tr>`}</tbody>
+    </table></div>
+    ${pending && pending.length ? `<h3 style="font-size:14px;margin:14px 0 6px">Yêu cầu đang chờ (${pending.length})</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Leader</th><th>Tạo lúc</th><th></th></tr></thead>
+      <tbody>${pendingRows}</tbody></table></div>` : ""}`,
+    `<button class="btn secondary" onclick="document.getElementById('mx').click()">Đóng</button>`, "lg");
+  on("[data-fpenr]", "click", async (e) => {
+    const d = e.currentTarget.dataset;
+    if (!confirm(`Tạo yêu cầu enroll vân tay cho ${d.name}?\nLeader cần ra máy quét trong vòng 5 phút tiếp theo.`)) return;
+    const { error } = await sb.from("biz_fingerprint_enroll_requests").insert({ profile_id: d.fpenr });
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã tạo yêu cầu enroll — Leader ra máy quét ngay", "ok");
+    closeModal(); openFingerprintEnrollModal();
+  }, modalRoot());
+  on("[data-fpdel]", "click", async (e) => {
+    const d = e.currentTarget.dataset;
+    if (!confirm(`Xoá vân tay của ${d.name}? Sau đó cần enroll lại.`)) return;
+    const { error } = await sb.from("profiles").update({ fingerprint_id: null }).eq("id", d.fpdel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã xoá vân tay", "ok"); closeModal(); openFingerprintEnrollModal();
+  }, modalRoot());
+  on("[data-fpcancel]", "click", async (e) => {
+    const { error } = await sb.from("biz_fingerprint_enroll_requests").update({ status: "cancelled", cancelled_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.fpcancel);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã huỷ yêu cầu", "ok"); closeModal(); openFingerprintEnrollModal();
+  }, modalRoot());
 }
 
 async function showAttPayQR(leader, month, rates) {
