@@ -938,7 +938,7 @@ async function bizAttendance() {
           const its = byLeader[lid];
 
           const approved = its.filter(
-            (x) => x.status === "approved"
+            (x) => x.status === "approved" && x.end_time
           );
 
           const nCn = approved.filter(
@@ -1028,7 +1028,7 @@ async function bizAttendance() {
               <td style="white-space:nowrap">
 
                 ${
-                  x.status === "pending"
+                  x.status === "pending" && x.end_time
                     ? `
                       <button
                         class="btn success sm"
@@ -1042,7 +1042,9 @@ async function bizAttendance() {
                         Từ chối
                       </button>
                     `
-                    : ""
+                    : x.status === "pending" && !x.end_time
+                      ? '<span class="meta" style="color:var(--amber)">⏱ Đợi tan ca</span>'
+                      : ""
                 }
 
                 ${
@@ -1262,6 +1264,22 @@ async function bizAttendance() {
   // ===========================
   on("[data-attapprove]", "click", async (e) => {
 
+    const rowId = e.currentTarget.dataset.attapprove;
+
+    // Guard: chỉ cho duyệt khi ca đã đóng (có end_time)
+    const { data: row } = await sb
+      .from("biz_attendance")
+      .select("end_time")
+      .eq("id", rowId)
+      .maybeSingle();
+
+    if (!row || !row.end_time) {
+      return toast(
+        "Chưa tan ca, không thể duyệt",
+        "err"
+      );
+    }
+
     const { error } =
       await sb
         .from("biz_attendance")
@@ -1273,7 +1291,7 @@ async function bizAttendance() {
         })
         .eq(
           "id",
-          e.currentTarget.dataset.attapprove
+          rowId
         );
 
     if (error)
