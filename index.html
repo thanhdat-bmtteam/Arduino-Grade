@@ -1043,7 +1043,19 @@ async function bizAttendance() {
                       </button>
                     `
                     : x.status === "pending" && !x.end_time
-                      ? '<span class="meta" style="color:var(--amber)">⏱ Đợi tan ca</span>'
+                      ? `
+                        <button
+                          class="btn warn sm"
+                          data-attclose="${x.id}"
+                          data-start="${x.start_time}">
+                          ✎ Đóng ca
+                        </button>
+                        <button
+                          class="btn danger sm"
+                          data-attreject="${x.id}">
+                          Huỷ
+                        </button>
+                      `
                       : ""
                 }
 
@@ -1346,6 +1358,38 @@ async function bizAttendance() {
   // ===========================
   // MỞ LẠI
   // ===========================
+  // ===========================
+  // ĐÓNG CA THỦ CÔNG (cho row pending chưa tan ca)
+  // ===========================
+  on("[data-attclose]", "click", async (e) => {
+    const id = e.currentTarget.dataset.attclose;
+    const startTime = e.currentTarget.dataset.start || "";
+    const defaultEnd = new Date().toTimeString().slice(0, 5);
+    const t = prompt(
+      `Nhập giờ tan ca (HH:MM)\n` +
+      `Giờ vào ca: ${startTime.slice(0, 5)}\n` +
+      `Mặc định: giờ hiện tại`,
+      defaultEnd
+    );
+    if (t === null) return;
+    let endTime = t.trim();
+    if (/^\d{1,2}:\d{2}$/.test(endTime)) endTime += ":00";
+    if (!/^\d{1,2}:\d{2}:\d{2}$/.test(endTime)) {
+      return toast("Sai định dạng (HH:MM)", "err");
+    }
+    const { error } = await sb
+      .from("biz_attendance")
+      .update({
+        end_time: endTime,
+        admin_note: "⚠ Admin đóng ca thủ công",
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", id);
+    if (error) return toast("Lỗi: " + error.message, "err");
+    toast("Đã đóng ca, giờ có thể duyệt", "ok");
+    bizAttendance();
+  }, bcontent());
+
   on("[data-attreopen]", "click", async (e) => {
 
     const { error } =
