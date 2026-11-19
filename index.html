@@ -3445,10 +3445,16 @@ async function projectDetail(p) {
           sb.from("biz_employees").select("id,name").eq("name", empName2).limit(1),
           sb.from("profiles").select("id,full_name,biz_employee_id").eq("role", "leader"),
         ]);
+        // Match leader theo 3 tầng (từ chính xác → lỏng dần):
+        //   1. biz_employee_id (link cứng)
+        //   2. full_name == empName (exact, lowercase + trim)
+        //   3. removeVN(full_name) == removeVN(empName) (bỏ dấu tiếng Việt)
         const n2 = (v) => (v || "").toString().trim().toLowerCase();
+        const nvn = (v) => removeVN(String(v || "")).trim().toLowerCase();
         const empRow2 = (empRows2 || [])[0];
         let lead2 = empRow2 ? (leaders2 || []).find((l) => n2(l.biz_employee_id) === n2(empRow2.id)) : null;
         if (!lead2) lead2 = (leaders2 || []).find((l) => n2(l.full_name) === n2(empName2));
+        if (!lead2) lead2 = (leaders2 || []).find((l) => nvn(l.full_name) === nvn(empName2));
         if (lead2) {
           const { data: dup2 } = await sb.from("biz_tasks").select("id,amount,deadline").eq("project_id", p.id).eq("assignee_id", lead2.id).eq("title", title2).limit(1);
           if (dup2 && dup2.length) {
@@ -3562,8 +3568,8 @@ async function projectDetail(p) {
   if (isAdmin) {
     const openTaskModal = (ex) => {
       ex = ex || {};
-      // Pre-select: ưu tiên assignee hiện tại của task, fallback về filterLeader (khi tạo mới)
-      const selectedAssignee = ex.assignee_id || filterLeader || "";
+      // Pre-select: assignee hiện tại của task (khi sửa) hoặc rỗng (khi tạo mới)
+      const selectedAssignee = ex.assignee_id || "";
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
