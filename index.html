@@ -380,7 +380,12 @@ function fmtDate(iso) {
 function fmtDT(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
-  return d.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("vi-VN", {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+    hour12: false,
+    timeZone: "Asia/Ho_Chi_Minh"
+  });
 }
 function toLocalInput(iso) {
   if (!iso) return "";
@@ -3578,8 +3583,8 @@ async function projectDetail(p) {
   .join("")}</select></div>
         <div class="field"><label>Deadline (hạn chót)</label>
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            <input id="tk-deadline-date" type="date" value="${ex.deadline ? new Date(ex.deadline).toLocaleDateString('en-CA') : ''}" style="flex:1;min-width:140px"/>
-            <input id="tk-deadline-time" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" value="${ex.deadline ? String(new Date(ex.deadline).getHours()).padStart(2,'0') + ':' + String(new Date(ex.deadline).getMinutes()).padStart(2,'0') : ''}" style="width:90px;text-align:center;font-variant-numeric:tabular-nums"/>
+            <input id="tk-deadline-date" type="date" value="${ex.deadline ? new Date(ex.deadline).toLocaleDateString('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }) : ''}" style="flex:1;min-width:140px"/>
+            <input id="tk-deadline-time" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" value="${ex.deadline ? new Date(ex.deadline).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Ho_Chi_Minh' }) : ''}" style="width:90px;text-align:center;font-variant-numeric:tabular-nums"/>
             <button type="button" class="btn ghost sm" id="tk-dl-clear" title="Xoá deadline">✕</button>
           </div>
           <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
@@ -3601,13 +3606,18 @@ async function projectDetail(p) {
       titleEl.addEventListener("input", toggleNote);
       titleEl.addEventListener("change", toggleNote);
       toggleNote();
-      // Preset deadline quick-fill (set cả 2 input: date + time)
+      // Preset deadline quick-fill (set cả 2 input: date + time) — luôn theo VN timezone
       const dlDate = document.getElementById("tk-deadline-date");
       const dlTime = document.getElementById("tk-deadline-time");
       const setDl = (daysFromToday, hh = 23, mm = 59) => {
-        const d = new Date();
-        d.setDate(d.getDate() + daysFromToday);
-        dlDate.value = d.toLocaleDateString("en-CA"); // YYYY-MM-DD
+        // Lấy ngày hôm nay theo VN tz, cộng N ngày
+        const vnToday = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Ho_Chi_Minh" });
+        const [y, m, d] = vnToday.split("-").map(Number);
+        const target = new Date(Date.UTC(y, m - 1, d + daysFromToday));
+        const yy = target.getUTCFullYear();
+        const mm2 = String(target.getUTCMonth() + 1).padStart(2, "0");
+        const dd = String(target.getUTCDate()).padStart(2, "0");
+        dlDate.value = `${yy}-${mm2}-${dd}`;
         dlTime.value = String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
       };
       document.getElementById("tk-dl-eod").onclick = () => setDl(0);
@@ -3624,8 +3634,9 @@ async function projectDetail(p) {
         if (dateStr) {
           const t = timeStr || "23:59";
           if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) return toast("Giờ sai định dạng (HH:MM 24h, VD 23:59)", "err");
-          // Tạo Date theo LOCAL time VN rồi convert sang ISO
-          deadlineISO = new Date(`${dateStr}T${t}:00`).toISOString();
+          // Ép timezone VN (+07:00) rõ ràng, không phụ thuộc browser tz
+          deadlineISO = new Date(`${dateStr}T${t}:00+07:00`).toISOString();
+          console.log("[deadline save]", { dateStr, timeStr: t, deadlineISO, display: new Date(deadlineISO).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh" }) });
         }
         const amt = Number(document.getElementById("tk-amount").value) || null;
         e.target.disabled = true;
