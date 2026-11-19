@@ -3478,13 +3478,45 @@ async function projectDetail(p) {
     : s === "review" ? '<span class="badge amber">Chờ duyệt</span>'
     : s === "revise" ? '<span class="badge red">Cần sửa</span>'
     : '<span class="badge gray">Chờ làm</span>';
+  // Helper tính badge deadline/penalty
+  const tkDeadlineBadge = (t) => {
+    if (!t.deadline) return "";
+    const dlDate = new Date(t.deadline);
+    const now = new Date();
+    const msDiff = dlDate - now;
+    const daysDiff = Math.floor(msDiff / 86400000);
+    if (t.status === "done") {
+      // Đã hoàn thành — chỉ show nếu có penalty
+      if (t.penalty_pct > 0 && !t.penalty_waived) {
+        return ` <span class="badge red">⚠ -${t.penalty_pct}% (${esc(t.penalty_reason || "trễ")})</span>${t.pay_delayed ? ' <span class="badge red">CK chậm 1 tháng</span>' : ""}`;
+      }
+      if (t.penalty_waived && t.penalty_pct > 0) {
+        return ` <span class="badge green">✓ Miễn phạt (${t.penalty_pct}%)</span>`;
+      }
+      return "";
+    }
+    // Chưa xong
+    if (msDiff > 0) {
+      const color = msDiff < 86400000 ? "var(--red)" : (msDiff < 3 * 86400000 ? "var(--amber)" : "var(--muted)");
+      const label = msDiff < 86400000 ? "Còn <24h" : `Còn ${Math.ceil(msDiff / 86400000)} ngày`;
+      return ` <span class="meta" style="color:${color}">⏰ ${label} (${fmtDT(t.deadline)})</span>`;
+    }
+    // Quá hạn
+    const lateDays = -daysDiff;
+    const penBadge = t.penalty_pct > 0 && !t.penalty_waived
+      ? ` <span class="badge red">-${t.penalty_pct}%${t.pay_delayed ? " + CK chậm" : ""}</span>`
+      : "";
+    return ` <span class="badge red">⚠ Trễ ${lateDays} ngày</span>${penBadge}`;
+  };
   const trows = (tasks || []).map((t) => `<tr>
-    <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : ""}</td>
+    <td><b>${esc(t.title)}</b>${t.title === "Báo giá" && Number(t.amount) > 0 ? ` <span class="badge blue">${fmtVND(t.amount)}</span>` : ""}${tkDeadlineBadge(t)}${t.admin_note && (t.status === "revise" || t.status === "done") ? `<div class="meta" style="color:${t.status === "revise" ? "var(--red)" : "var(--muted)"}">💬 ${esc(t.admin_note)}</div>` : ""}</td>
     <td>${esc(leaderById[t.assignee_id] || "(chưa giao)")}</td>
     <td>${stx(t.status)}</td>
     <td style="white-space:nowrap">
       ${t.status === "review" ? `<button class="btn success sm" data-tkapprove="${t.id}">✓ Duyệt</button><button class="btn danger sm" data-tkrevise="${t.id}">Yêu cầu sửa</button>` : ""}
       ${t.status === "done" ? `<button class="btn ghost sm" data-tkreopen="${t.id}">Mở lại</button>` : ""}
+      ${t.penalty_pct > 0 && !t.penalty_waived ? `<button class="btn warn sm" data-tkwaive="${t.id}">Miễn phạt</button>` : ""}
+      ${t.deadline && t.status !== "done" ? `<button class="btn ghost sm" data-tkextend="${t.id}" data-cur="${t.deadline}">Gia hạn</button>` : ""}
       <button class="btn ghost sm" data-tked="${t.id}">Sửa</button>
       <button class="btn danger sm" data-tkdel="${t.id}">✕</button></td></tr>`).join("");
   body.insertAdjacentHTML("beforeend", `
@@ -3502,6 +3534,13 @@ async function projectDetail(p) {
   .filter(l => l.role === "leader")
   .map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`)
   .join("")}</select></div>
+        <div class="field"><label>Deadline (hạn chót)</label>
+          <input id="tk-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/>
+          <p class="help">Trễ ≥3 ngày: -5% · ≥5 ngày: -10% · ≥7 ngày: -15% + CK chậm 1 tháng. Để trống nếu không áp dụng.</p>
+        </div>
+        <div class="field"><label>Số tiền lương (nếu có)</label>
+          <input id="tk-amount" type="number" value="${ex.amount || ""}" placeholder="VD: 200000"/>
+        </div>
         <p class="help" id="tk-note-bg" style="display:none">Với phần việc "Báo giá", <b>Leader sẽ nhập số tiền báo giá</b> khi bấm gửi. Bạn duyệt / yêu cầu sửa như bình thường.</p>
 `,
         `<button class="btn secondary" onclick="document.getElementById('mx').click()">Huỷ</button><button class="btn" id="tk-save">Lưu</button>`);
@@ -3513,8 +3552,17 @@ async function projectDetail(p) {
       document.getElementById("tk-save").onclick = async (e) => {
         const title = titleEl.value.trim();
         if (!title) return toast("Nhập phần việc", "err");
+        const dl = document.getElementById("tk-deadline").value;
+        const amt = Number(document.getElementById("tk-amount").value) || null;
         e.target.disabled = true;
-        const payload = { project_id: p.id, title, assignee_id: document.getElementById("tk-assign").value || null, updated_at: new Date().toISOString() };
+        const payload = {
+          project_id: p.id,
+          title,
+          assignee_id: document.getElementById("tk-assign").value || null,
+          deadline: dl ? new Date(dl).toISOString() : null,
+          amount: amt,
+          updated_at: new Date().toISOString(),
+        };
         if (!ex.id) payload.status = "todo";
         const res = ex.id ? await sb.from("biz_tasks").update(payload).eq("id", ex.id) : await sb.from("biz_tasks").insert(payload);
         if (res.error) { toast("Lỗi: " + res.error.message, "err"); e.target.disabled = false; return; }
@@ -3547,6 +3595,51 @@ async function projectDetail(p) {
       if (!confirm("Mở lại nhiệm vụ này (đưa về 'Chờ làm')?")) return;
       const { error } = await sb.from("biz_tasks").update({ status: "todo", admin_note: "", updated_at: new Date().toISOString() }).eq("id", e.currentTarget.dataset.tkreopen);
       if (error) return toast("Lỗi: " + error.message, "err");
+      projectDetail(p);
+    }, body);
+
+    // Miễn phạt — giữ nguyên penalty_pct để có log, chỉ set waived=true
+    on("[data-tkwaive]", "click", async (e) => {
+      if (!confirm("Miễn phạt nhiệm vụ này?\nLeader vẫn thấy % phạt nhưng không bị trừ lương.")) return;
+      const { error } = await sb.from("biz_tasks").update({
+        penalty_waived: true,
+        updated_at: new Date().toISOString(),
+      }).eq("id", e.currentTarget.dataset.tkwaive);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast("Đã miễn phạt", "ok"); projectDetail(p);
+    }, body);
+
+    // Gia hạn deadline — hiển thị datetime cũ, admin chỉnh
+    on("[data-tkextend]", "click", async (e) => {
+      const id = e.currentTarget.dataset.tkextend;
+      const cur = e.currentTarget.dataset.cur;
+      const curLocal = cur ? toLocalInput(cur) : "";
+      const input = prompt(
+        "Nhập deadline mới (YYYY-MM-DD HH:MM):\nVD: 2026-11-25 18:00\nBỏ trống = XOÁ deadline (không áp phạt nữa).",
+        curLocal.replace("T", " ")
+      );
+      if (input === null) return;
+      const s = input.trim();
+      let newDeadline = null;
+      if (s) {
+        const d = new Date(s.replace(" ", "T"));
+        if (isNaN(d.getTime())) return toast("Sai định dạng ngày giờ", "err");
+        newDeadline = d.toISOString();
+      }
+      // Reset mọi flag penalty+reminder vì đây là deadline mới
+      const { error } = await sb.from("biz_tasks").update({
+        deadline: newDeadline,
+        penalty_pct: 0,
+        penalty_reason: null,
+        pay_delayed: false,
+        penalty_waived: false,
+        reminder_before_sent_at: null,
+        reminder_late_sent_at: null,
+        penalty_notified_at: null,
+        updated_at: new Date().toISOString(),
+      }).eq("id", id);
+      if (error) return toast("Lỗi: " + error.message, "err");
+      toast(newDeadline ? "Đã gia hạn" : "Đã bỏ deadline", "ok");
       projectDetail(p);
     }, body);
   }
@@ -4068,6 +4161,18 @@ async function bizEmployees() {
     if (!t) return true;
     return t.status === "done";
   });
+  // Helper: trả về số tiền SAU khi áp penalty do trễ deadline
+  const getTaskOf = (x) => {
+    if (TASK_SKIP.has(x.note)) return null;
+    const title = CHI2TASK[x.note] || x.note;
+    return taskLookup[tk(x.project_id, title, x.employee_name)] || null;
+  };
+  const applyPenalty = (x) => {
+    const base = Number(x.amount || 0);
+    const t = getTaskOf(x);
+    if (!t || t.penalty_waived || !t.penalty_pct) return base;
+    return Math.round(base * (100 - t.penalty_pct) / 100);
+  };
   const expMap = {}; items.forEach((x) => expMap[x.id] = x);
   const byName = {}; items.forEach((x) => { const n = x.employee_name.trim(); (byName[n] = byName[n] || []).push(x); });
   const allNames = [...new Set([...empList.map((e) => e.name), ...Object.keys(byName)])].sort((a, b) => a.localeCompare(b, "vi"));
@@ -4087,16 +4192,26 @@ async function bizEmployees() {
     let totalUnpaid = 0, totalPaid = 0;
     const cards = shown.map((name) => {
       const list = byName[name] || [];
-      list.forEach((x) => { if (x.paid) totalPaid += Number(x.amount || 0); else totalUnpaid += Number(x.amount || 0); });
-      const unpaid = list.filter((x) => !x.paid).reduce((s, x) => s + Number(x.amount || 0), 0);
+      list.forEach((x) => { const a = applyPenalty(x); if (x.paid) totalPaid += a; else totalUnpaid += a; });
+      const unpaid = list.filter((x) => !x.paid).reduce((s, x) => s + applyPenalty(x), 0);
       const items2 = sf ? list.filter((x) => (sf === "paid" ? x.paid : !x.paid)) : list;
       // Ẩn card của NV không có khoản nào match filter (VD lọc "Chưa CK" mà NV đã CK hết)
       if (sf && items2.length === 0) return "";
-      const rows = items2.map((x) => `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)">
-        <div style="min-width:0"><div>${esc(x.note || "(không tên)")} ${x.project_id && projName[x.project_id] ? `<span class="badge gray">${esc(projName[x.project_id])}</span>` : ""}</div>
+      const rows = items2.map((x) => {
+        const t = getTaskOf(x);
+        const base = Number(x.amount || 0);
+        const final = applyPenalty(x);
+        const penBadge = (t && t.penalty_pct > 0 && !t.penalty_waived)
+          ? ` <span class="badge red" title="Trễ deadline">-${t.penalty_pct}%${t.pay_delayed ? " + CK chậm" : ""}</span>` : "";
+        const amtHtml = (final !== base)
+          ? `<b><s style="color:var(--muted);font-weight:400">${fmtVND(base)}</s> → ${fmtVND(final)}</b>`
+          : `<b>${fmtVND(base)}</b>`;
+        return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)">
+        <div style="min-width:0"><div>${esc(x.note || "(không tên)")} ${x.project_id && projName[x.project_id] ? `<span class="badge gray">${esc(projName[x.project_id])}</span>` : ""}${penBadge}</div>
           <div class="meta">${x.paid ? '<span class="badge green">Đã CK</span>' : '<span class="badge red">Chưa CK</span>'} · ${fmtDate(x.expense_date)}</div></div>
-        <div style="text-align:right;white-space:nowrap"><b>${fmtVND(x.amount)}</b>
-          <div style="margin-top:4px"><button class="btn ghost sm" data-ptoggle="${x.id}">${x.paid ? "Bỏ CK" : "Đã CK"}</button></div></div></div>`).join("");
+        <div style="text-align:right;white-space:nowrap">${amtHtml}
+          <div style="margin-top:4px"><button class="btn ghost sm" data-ptoggle="${x.id}">${x.paid ? "Bỏ CK" : "Đã CK"}</button></div></div></div>`;
+      }).join("");
       const e = empByName[name];
       return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap;padding-bottom:8px">
           <b>${esc(name)}</b>${e && e.phone ? `<span class="meta">${esc(e.phone)}</span>` : (!e ? `<span class="meta">(chưa có trong danh sách NV)</span>` : "")}
