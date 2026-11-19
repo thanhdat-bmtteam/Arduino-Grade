@@ -3574,11 +3574,10 @@ async function projectDetail(p) {
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || [])
-  .filter(l => l.role === "leader")
   .map((l) => `<option value="${l.id}" ${l.id === selectedAssignee ? "selected" : ""}>${esc(l.full_name)}</option>`)
   .join("")}</select></div>
         <div class="field"><label>Deadline (hạn chót)</label>
-          <input id="tk-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/>
+          <input id="tk-deadline" type="datetime-local" lang="en-GB" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}" style="font-variant-numeric:tabular-nums"/>
           <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">
             <button type="button" class="btn ghost sm" id="tk-dl-eod">Cuối hôm nay 23:59</button>
             <button type="button" class="btn ghost sm" id="tk-dl-tmrw">Mai 23:59</button>
