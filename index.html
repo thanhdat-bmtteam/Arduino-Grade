@@ -3430,6 +3430,14 @@ async function projectDetail(p) {
     // Tự sinh nhiệm vụ tương ứng nếu nhân viên là Leader có tài khoản
     const empName2 = document.getElementById("exp-emp").value.trim();
     const noteVal2 = document.getElementById("exp-note").value.trim();
+    const expAmount2 = Number(document.getElementById("exp-amt").value) || null;
+    // Default deadline = 7 ngày sau từ ngày hôm nay (23:59 giờ VN)
+    const defaultDeadline = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 7);
+      d.setHours(23, 59, 0, 0);
+      return d.toISOString();
+    })();
     if (empName2 && noteVal2 && !TASK_SKIP.has(noteVal2)) {
       try {
         const title2 = CHI2TASK[noteVal2] || noteVal2;
@@ -3442,14 +3450,41 @@ async function projectDetail(p) {
         let lead2 = empRow2 ? (leaders2 || []).find((l) => n2(l.biz_employee_id) === n2(empRow2.id)) : null;
         if (!lead2) lead2 = (leaders2 || []).find((l) => n2(l.full_name) === n2(empName2));
         if (lead2) {
-          const { data: dup2 } = await sb.from("biz_tasks").select("id").eq("project_id", p.id).eq("assignee_id", lead2.id).eq("title", title2).limit(1);
-          if (dup2 && dup2.length) toast("Đã thêm khoản chi (nhiệm vụ \"" + title2 + "\" đã có sẵn)", "ok");
-          else {
-            const { error: te2 } = await sb.from("biz_tasks").insert({ project_id: p.id, title: title2, assignee_id: lead2.id, status: "todo" });
-            if (te2) toast("Khoản chi đã lưu; không tạo được nhiệm vụ: " + te2.message, "err");
-            else toast(`Đã thêm chi + tạo nhiệm vụ "${title2}" cho ${lead2.full_name}`, "ok");
+          const { data: dup2 } = await sb.from("biz_tasks").select("id,amount,deadline").eq("project_id", p.id).eq("assignee_id", lead2.id).eq("title", title2).limit(1);
+          if (dup2 && dup2.length) {
+            // Nhiệm vụ đã có: cập nhật amount nếu đang trống
+            const existing = dup2[0];
+            const upd = {};
+            if (!existing.amount && expAmount2) upd.amount = expAmount2;
+            if (!existing.deadline) upd.deadline = defaultDeadline;
+            if (Object.keys(upd).length) {
+              await sb.from("biz_tasks").update(upd).eq("id", existing.id);
+            }
+            toast("Đã thêm khoản chi (nhiệm vụ \"" + title2 + "\" đã có sẵn, đã cập nhật)", "ok");
           }
-        } else toast("Đã thêm khoản chi (nhân viên chưa liên kết tài khoản Leader nên không tạo nhiệm vụ)", "ok");
+          else {
+            const { error: te2 } = await sb.from("biz_tasks").insert({
+              project_id: p.id,
+              title: title2,
+              assignee_id: lead2.id,
+              status: "todo",
+              amount: expAmount2,
+              deadline: defaultDeadline,
+            });
+            if (te2) toast("Khoản chi đã lưu; không tạo được nhiệm vụ: " + te2.message, "err");
+            else toast(`Đã thêm chi + tạo nhiệm vụ "${title2}" cho ${lead2.full_name} (deadline +7 ngày)`, "ok");
+          }
+        } else {
+          // Không tìm được leader → vẫn tạo task (assignee_id=null) để admin vào gán + sửa deadline
+          const { data: dupNoLead } = await sb.from("biz_tasks").select("id").eq("project_id", p.id).is("assignee_id", null).eq("title", title2).limit(1);
+          if (!dupNoLead || !dupNoLead.length) {
+            await sb.from("biz_tasks").insert({
+              project_id: p.id, title: title2, assignee_id: null, status: "todo",
+              amount: expAmount2, deadline: defaultDeadline,
+            });
+          }
+          toast(`Đã thêm chi + tạo nhiệm vụ "${title2}" (chưa gán leader — vào tab Dự án chọn leader)`, "warn");
+        }
       } catch (err) { console.error("auto-task:", err); toast("Đã thêm khoản chi", "ok"); }
     } else toast("Đã thêm khoản chi", "ok");
     projectDetail(p);
@@ -3527,16 +3562,24 @@ async function projectDetail(p) {
   if (isAdmin) {
     const openTaskModal = (ex) => {
       ex = ex || {};
+      // Pre-select: ưu tiên assignee hiện tại của task, fallback về filterLeader (khi tạo mới)
+      const selectedAssignee = ex.assignee_id || filterLeader || "";
       showModal(ex.id ? "Sửa nhiệm vụ" : "Thêm nhiệm vụ", `
         <div class="field"><label>Phần việc *</label><input id="tk-title" list="tk-title-list" value="${esc(ex.title || "")}" placeholder="Chọn hoặc nhập…"/>
           <datalist id="tk-title-list">${taskNd.map((n) => `<option value="${esc(n)}"></option>`).join("")}</datalist></div>
         <div class="field"><label>Giao cho (Leader)</label><select id="tk-assign"><option value="">— Chưa giao —</option>${(leaders || [])
   .filter(l => l.role === "leader")
-  .map((l) => `<option value="${l.id}" ${l.id === filterLeader ? "selected" : ""}>${esc(l.full_name)}</option>`)
+  .map((l) => `<option value="${l.id}" ${l.id === selectedAssignee ? "selected" : ""}>${esc(l.full_name)}</option>`)
   .join("")}</select></div>
         <div class="field"><label>Deadline (hạn chót)</label>
           <input id="tk-deadline" type="datetime-local" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}"/>
-          <p class="help">Trễ ≥3 ngày: -5% · ≥5 ngày: -10% · ≥7 ngày: -15% + CK chậm 1 tháng. Để trống nếu không áp dụng.</p>
+          <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">
+            <button type="button" class="btn ghost sm" id="tk-dl-eod">Cuối hôm nay 23:59</button>
+            <button type="button" class="btn ghost sm" id="tk-dl-tmrw">Mai 23:59</button>
+            <button type="button" class="btn ghost sm" id="tk-dl-3d">+3 ngày 23:59</button>
+            <button type="button" class="btn ghost sm" id="tk-dl-7d">+7 ngày 23:59</button>
+          </div>
+          <p class="help">Dùng giờ 24h (VD: 23:59 = 11:59 CH tối). Trễ ≥3 ngày: -5% · ≥5 ngày: -10% · ≥7 ngày: -15% + CK chậm 1 tháng. Để trống nếu không áp dụng.</p>
         </div>
         <div class="field"><label>Số tiền lương (nếu có)</label>
           <input id="tk-amount" type="number" value="${ex.amount || ""}" placeholder="VD: 200000"/>
@@ -3549,6 +3592,18 @@ async function projectDetail(p) {
       titleEl.addEventListener("input", toggleNote);
       titleEl.addEventListener("change", toggleNote);
       toggleNote();
+      // Preset deadline quick-fill
+      const dlInput = document.getElementById("tk-deadline");
+      const setDl = (daysFromToday) => {
+        const d = new Date();
+        d.setDate(d.getDate() + daysFromToday);
+        d.setHours(23, 59, 0, 0);
+        dlInput.value = toLocalInput(d.toISOString());
+      };
+      document.getElementById("tk-dl-eod").onclick = () => setDl(0);
+      document.getElementById("tk-dl-tmrw").onclick = () => setDl(1);
+      document.getElementById("tk-dl-3d").onclick = () => setDl(3);
+      document.getElementById("tk-dl-7d").onclick = () => setDl(7);
       document.getElementById("tk-save").onclick = async (e) => {
         const title = titleEl.value.trim();
         if (!title) return toast("Nhập phần việc", "err");
