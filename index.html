@@ -3577,14 +3577,18 @@ async function projectDetail(p) {
   .map((l) => `<option value="${l.id}" ${l.id === selectedAssignee ? "selected" : ""}>${esc(l.full_name)}</option>`)
   .join("")}</select></div>
         <div class="field"><label>Deadline (hạn chót)</label>
-          <input id="tk-deadline" type="datetime-local" lang="en-GB" value="${ex.deadline ? toLocalInput(ex.deadline) : ""}" style="font-variant-numeric:tabular-nums"/>
-          <div style="display:flex;gap:4px;margin-top:4px;flex-wrap:wrap">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <input id="tk-deadline-date" type="date" value="${ex.deadline ? new Date(ex.deadline).toLocaleDateString('en-CA') : ''}" style="flex:1;min-width:140px"/>
+            <input id="tk-deadline-time" type="text" inputmode="numeric" placeholder="HH:MM" maxlength="5" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" value="${ex.deadline ? String(new Date(ex.deadline).getHours()).padStart(2,'0') + ':' + String(new Date(ex.deadline).getMinutes()).padStart(2,'0') : ''}" style="width:90px;text-align:center;font-variant-numeric:tabular-nums"/>
+            <button type="button" class="btn ghost sm" id="tk-dl-clear" title="Xoá deadline">✕</button>
+          </div>
+          <div style="display:flex;gap:4px;margin-top:6px;flex-wrap:wrap">
             <button type="button" class="btn ghost sm" id="tk-dl-eod">Cuối hôm nay 23:59</button>
             <button type="button" class="btn ghost sm" id="tk-dl-tmrw">Mai 23:59</button>
             <button type="button" class="btn ghost sm" id="tk-dl-3d">+3 ngày 23:59</button>
             <button type="button" class="btn ghost sm" id="tk-dl-7d">+7 ngày 23:59</button>
           </div>
-          <p class="help">Dùng giờ 24h (VD: 23:59 = 11:59 CH tối). Trễ ≥3 ngày: -5% · ≥5 ngày: -10% · ≥7 ngày: -15% + CK chậm 1 tháng. Để trống nếu không áp dụng.</p>
+          <p class="help">Giờ dùng định dạng 24h (VD: <b>23:59</b> = 11:59 tối, <b>08:00</b> = 8h sáng). Trễ ≥3 ngày: -5% · ≥5 ngày: -10% · ≥7 ngày: -15% + CK chậm 1 tháng. Để trống nếu không áp dụng.</p>
         </div>
         <div class="field"><label>Số tiền lương (nếu có)</label>
           <input id="tk-amount" type="number" value="${ex.amount || ""}" placeholder="VD: 200000"/>
@@ -3597,29 +3601,39 @@ async function projectDetail(p) {
       titleEl.addEventListener("input", toggleNote);
       titleEl.addEventListener("change", toggleNote);
       toggleNote();
-      // Preset deadline quick-fill
-      const dlInput = document.getElementById("tk-deadline");
-      const setDl = (daysFromToday) => {
+      // Preset deadline quick-fill (set cả 2 input: date + time)
+      const dlDate = document.getElementById("tk-deadline-date");
+      const dlTime = document.getElementById("tk-deadline-time");
+      const setDl = (daysFromToday, hh = 23, mm = 59) => {
         const d = new Date();
         d.setDate(d.getDate() + daysFromToday);
-        d.setHours(23, 59, 0, 0);
-        dlInput.value = toLocalInput(d.toISOString());
+        dlDate.value = d.toLocaleDateString("en-CA"); // YYYY-MM-DD
+        dlTime.value = String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
       };
       document.getElementById("tk-dl-eod").onclick = () => setDl(0);
       document.getElementById("tk-dl-tmrw").onclick = () => setDl(1);
       document.getElementById("tk-dl-3d").onclick = () => setDl(3);
       document.getElementById("tk-dl-7d").onclick = () => setDl(7);
+      document.getElementById("tk-dl-clear").onclick = () => { dlDate.value = ""; dlTime.value = ""; };
       document.getElementById("tk-save").onclick = async (e) => {
         const title = titleEl.value.trim();
         if (!title) return toast("Nhập phần việc", "err");
-        const dl = document.getElementById("tk-deadline").value;
+        const dateStr = document.getElementById("tk-deadline-date").value;
+        const timeStr = document.getElementById("tk-deadline-time").value.trim();
+        let deadlineISO = null;
+        if (dateStr) {
+          const t = timeStr || "23:59";
+          if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) return toast("Giờ sai định dạng (HH:MM 24h, VD 23:59)", "err");
+          // Tạo Date theo LOCAL time VN rồi convert sang ISO
+          deadlineISO = new Date(`${dateStr}T${t}:00`).toISOString();
+        }
         const amt = Number(document.getElementById("tk-amount").value) || null;
         e.target.disabled = true;
         const payload = {
           project_id: p.id,
           title,
           assignee_id: document.getElementById("tk-assign").value || null,
-          deadline: dl ? new Date(dl).toISOString() : null,
+          deadline: deadlineISO,
           amount: amt,
           updated_at: new Date().toISOString(),
         };
